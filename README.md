@@ -211,7 +211,7 @@ type Module interface {
 
 ## 许可证
 
-[MIT License](LICENSE)
+[AGPL-3.0 license](LICENSE)
 
 ## 贡献
 
