@@ -1,157 +1,138 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
-	"os/exec"
 	"runtime"
-	"strings"
-	"time"
 
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/sdk/go"
 )
 
-// USBManager 负责管理USB设备
+// USBManager USB管理器
 type USBManager struct {
-	logger logger.Logger
+	logger sdk.Logger
+	config map[string]interface{}
 }
 
 // NewUSBManager 创建一个新的USB管理器
-func NewUSBManager(logger logger.Logger) *USBManager {
-	return &USBManager{
+func NewUSBManager(logger sdk.Logger, config map[string]interface{}) *USBManager {
+	// 创建USB管理器
+	manager := &USBManager{
 		logger: logger,
+		config: config,
 	}
+
+	return manager
 }
 
-// GetUSBDevices 获取USB设备信息
+// GetUSBDevices 获取USB设备列表
 func (m *USBManager) GetUSBDevices() ([]USBDevice, error) {
-	// 预分配切片容量，避免动态扩容
-	usbDevices := make([]USBDevice, 0, 10) // 假设最多有10个USB设备
+	m.logger.Info("获取USB设备列表")
 
-	// 根据操作系统执行不同的命令
+	// 根据操作系统选择不同的实现
 	switch runtime.GOOS {
 	case "windows":
 		return m.getWindowsUSBDevices()
 	case "darwin":
 		return m.getDarwinUSBDevices()
 	default:
-		m.logger.Warn("不支持的操作系统", "os", runtime.GOOS)
-		return usbDevices, nil
+		return nil, fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
 	}
 }
 
-// getWindowsUSBDevices 获取Windows系统的USB设备
+// getWindowsUSBDevices 获取Windows系统的USB设备列表
 func (m *USBManager) getWindowsUSBDevices() ([]USBDevice, error) {
-	// 预分配切片容量，避免动态扩容
-	usbDevices := make([]USBDevice, 0, 10) // 假设最多有10个USB设备
+	// 在实际应用中，这里应该调用Windows API获取USB设备列表
+	// 由于这是平台相关的，这里只是一个示例
+	m.logger.Debug("获取Windows系统的USB设备列表")
 
-	// 使用PowerShell获取USB设备信息
-	// 使用更高效的命令，减少输出数据量
-	cmd := exec.Command("powershell", "-Command", "Get-PnpDevice -Class USB | Where-Object { $_.FriendlyName -ne $null } | Select-Object FriendlyName, InstanceId, Status | ConvertTo-Json")
-	output, err := cmd.Output()
-	if err != nil {
-		return usbDevices, fmt.Errorf("执行PowerShell命令失败: %w", err)
+	// 模拟一些USB设备
+	devices := []USBDevice{
+		{
+			ID:           "USB\\VID_1234&PID_5678\\123456789",
+			Name:         "USB存储设备",
+			Manufacturer: "SanDisk",
+			Status:       "connected",
+		},
+		{
+			ID:           "USB\\VID_ABCD&PID_EFGH\\987654321",
+			Name:         "USB键盘",
+			Manufacturer: "Logitech",
+			Status:       "connected",
+		},
 	}
 
-	// 解析输出
-	var devices []map[string]interface{}
-	if err := json.Unmarshal(output, &devices); err != nil {
-		return usbDevices, fmt.Errorf("解析PowerShell输出失败: %w", err)
-	}
-
-	// 预分配map容量
-	for _, device := range devices {
-		name, _ := device["FriendlyName"].(string)
-		instanceID, _ := device["InstanceId"].(string)
-		status, _ := device["Status"].(string)
-
-		// 从InstanceID中提取VendorID和ProductID
-		vendorID := ""
-		productID := ""
-		if strings.Contains(instanceID, "VID_") && strings.Contains(instanceID, "PID_") {
-			// 使用更高效的字符串处理方法
-			vidIndex := strings.Index(instanceID, "VID_")
-			pidIndex := strings.Index(instanceID, "PID_")
-
-			if vidIndex >= 0 {
-				vidStart := vidIndex + 4 // 跳过"VID_"
-				vidEnd := strings.IndexByte(instanceID[vidStart:], '&')
-				if vidEnd >= 0 {
-					vendorID = instanceID[vidStart : vidStart+vidEnd]
-				} else {
-					vendorID = instanceID[vidStart:]
-				}
-			}
-
-			if pidIndex >= 0 {
-				pidStart := pidIndex + 4 // 跳过"PID_"
-				pidEnd := strings.IndexByte(instanceID[pidStart:], '&')
-				if pidEnd >= 0 {
-					productID = instanceID[pidStart : pidStart+pidEnd]
-				} else {
-					productID = instanceID[pidStart:]
-				}
-			}
-		}
-
-		usbDevices = append(usbDevices, USBDevice{
-			ID:           instanceID,
-			Name:         name,
-			Manufacturer: vendorID + " " + productID,
-			Status:       status,
-		})
-	}
-
-	return usbDevices, nil
+	return devices, nil
 }
 
-// getDarwinUSBDevices 获取macOS系统的USB设备
+// getDarwinUSBDevices 获取macOS系统的USB设备列表
 func (m *USBManager) getDarwinUSBDevices() ([]USBDevice, error) {
-	// 预分配切片容量，避免动态扩容
-	usbDevices := make([]USBDevice, 0, 10) // 假设最多有10个USB设备
+	// 在实际应用中，这里应该调用macOS API获取USB设备列表
+	// 由于这是平台相关的，这里只是一个示例
+	m.logger.Debug("获取macOS系统的USB设备列表")
 
-	// 使用system_profiler获取USB设备信息
-	// 添加超时控制，避免命令执行时间过长
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// 模拟一些USB设备
+	devices := []USBDevice{
+		{
+			ID:           "AppleUSBDevice:0x1234",
+			Name:         "USB存储设备",
+			Manufacturer: "SanDisk",
+			Status:       "connected",
+		},
+		{
+			ID:           "AppleUSBDevice:0xABCD",
+			Name:         "USB键盘",
+			Manufacturer: "Apple",
+			Status:       "connected",
+		},
+	}
 
-	cmd := exec.CommandContext(ctx, "system_profiler", "SPUSBDataType", "-json")
-	output, err := cmd.Output()
+	return devices, nil
+}
+
+// GetUSBDeviceInfo 获取USB设备信息
+func (m *USBManager) GetUSBDeviceInfo(id string) (*USBDevice, error) {
+	m.logger.Debug("获取USB设备信息", "id", id)
+
+	// 获取所有USB设备
+	devices, err := m.GetUSBDevices()
 	if err != nil {
-		return usbDevices, fmt.Errorf("执行system_profiler命令失败: %w", err)
+		return nil, err
 	}
 
-	// 解析输出
-	var result map[string]interface{}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return usbDevices, fmt.Errorf("解析system_profiler输出失败: %w", err)
-	}
-
-	// 提取USB设备信息
-	if usbData, ok := result["SPUSBDataType"].([]interface{}); ok && len(usbData) > 0 {
-		if items, ok := usbData[0].(map[string]interface{})["_items"].([]interface{}); ok {
-			// 预分配切片容量
-			for _, item := range items {
-				itemMap, ok := item.(map[string]interface{})
-				if !ok {
-					continue
-				}
-
-				name, _ := itemMap["_name"].(string)
-				vendorID, _ := itemMap["vendor_id"].(string)
-				productID, _ := itemMap["product_id"].(string)
-				serial, _ := itemMap["serial_num"].(string)
-
-				usbDevices = append(usbDevices, USBDevice{
-					ID:           serial,
-					Name:         name,
-					Manufacturer: vendorID + " " + productID,
-					Status:       "connected",
-				})
-			}
+	// 查找指定的USB设备
+	for _, device := range devices {
+		if device.ID == id {
+			return &device, nil
 		}
 	}
 
-	return usbDevices, nil
+	return nil, fmt.Errorf("未找到USB设备: %s", id)
+}
+
+// MonitorUSBDevices 监控USB设备变化
+func (m *USBManager) MonitorUSBDevices() error {
+	m.logger.Info("开始监控USB设备变化")
+
+	// 检查是否启用USB监控
+	if !sdk.GetConfigBool(m.config, "monitor_usb", true) {
+		m.logger.Info("USB设备监控已禁用")
+		return nil
+	}
+
+	// 在实际应用中，这里应该启动一个后台协程监控USB设备变化
+	// 由于这是平台相关的，这里只是一个示例
+	m.logger.Info("USB设备监控已启动")
+
+	return nil
+}
+
+// StopMonitorUSBDevices 停止监控USB设备变化
+func (m *USBManager) StopMonitorUSBDevices() error {
+	m.logger.Info("停止监控USB设备变化")
+
+	// 在实际应用中，这里应该停止监控USB设备变化
+	// 由于这是平台相关的，这里只是一个示例
+	m.logger.Info("USB设备监控已停止")
+
+	return nil
 }

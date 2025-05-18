@@ -1,0 +1,37 @@
+# 终端管控插件配置
+enabled: true
+
+# 是否允许远程执行命令
+allow_remote_command: true
+
+# 是否允许远程安装软件
+allow_software_install: true
+
+# 是否允许远程终止进程
+allow_process_kill: true
+
+# 命令执行超时时间（秒）
+command_timeout: 30
+
+# 软件安装超时时间（秒）
+install_timeout: 600
+
+# 进程缓存过期时间（秒）
+process_cache_expiration: 10
+
+# 日志级别
+log_level: "info"
+
+# 白名单进程（不允许终止）
+protected_processes:
+  - "agent.exe"
+  - "system"
+  - "explorer.exe"
+
+# 白名单命令（允许执行）
+allowed_commands:
+  - "ipconfig"
+  - "ping"
+  - "dir"
+  - "ls"
+  - "ps"

@@ -1,0 +1,17 @@
+{
+  "id": "assets",
+  "name": "资产管理插件",
+  "version": "1.0.0",
+  "description": "资产管理模块，用于收集和管理终端资产信息",
+  "entry_point": {
+    "type": "go",
+    "path": "main.go"
+  },
+  "dependencies": [],
+  "capabilities": ["asset_management"],
+  "supported_platforms": ["windows", "linux", "darwin"],
+  "language": "go",
+  "author": "Kennel Team",
+  "license": "MIT",
+  "min_framework_version": "1.0.0"
+}

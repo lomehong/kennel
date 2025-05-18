@@ -1,169 +1,312 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"time"
+	"strconv"
 
-	"github.com/hashicorp/go-hclog"
-	"github.com/lomehong/kennel/pkg/logger"
-	pluginLib "github.com/lomehong/kennel/pkg/plugin"
-	"github.com/lomehong/kennel/pkg/utils"
+	"github.com/lomehong/kennel/pkg/core/plugin"
+	"github.com/lomehong/kennel/pkg/sdk/go"
 )
 
 // ControlModule 实现了终端管控模块
 type ControlModule struct {
-	logger         logger.Logger
-	config         map[string]interface{}
-	processCache   *ProcessCache
+	*sdk.BaseModule
 	processManager *ProcessManager
-	commandManager *CommandManager
+	commandExecutor *CommandExecutor
 }
 
 // NewControlModule 创建一个新的终端管控模块
-func NewControlModule() pluginLib.Module {
-	// 创建日志器
-	log := logger.NewLogger("control-module", hclog.Info)
-
-	// 创建进程缓存
-	processCache := NewProcessCache()
+func NewControlModule() *ControlModule {
+	// 创建基础模块
+	base := sdk.NewBaseModule(
+		"control",
+		"终端管控插件",
+		"1.0.0",
+		"终端管控模块，用于远程执行命令、管理进程和安装软件",
+	)
 
 	// 创建模块
 	module := &ControlModule{
-		logger:       log,
-		config:       make(map[string]interface{}),
-		processCache: processCache,
+		BaseModule: base,
 	}
-
-	// 创建进程管理器
-	module.processManager = NewProcessManager(log)
-
-	// 创建命令管理器
-	module.commandManager = NewCommandManager(log, module.config)
 
 	return module
 }
 
 // Init 初始化模块
-func (m *ControlModule) Init(config map[string]interface{}) error {
-	m.logger.Info("初始化终端管控模块")
-	m.config = config
+func (m *ControlModule) Init(ctx context.Context, config *plugin.ModuleConfig) error {
+	// 调用基类初始化
+	if err := m.BaseModule.Init(ctx, config); err != nil {
+		return err
+	}
 
-	// 更新命令管理器的配置
-	m.commandManager = NewCommandManager(m.logger, config)
+	m.Logger.Info("初始化终端管控模块")
+
+	// 设置日志级别
+	logLevel := sdk.GetConfigString(m.Config, "log_level", "info")
+	m.Logger.Debug("设置日志级别", "level", logLevel)
+
+	// 创建进程管理器
+	m.processManager = NewProcessManager(m.Logger, m.Config)
+
+	// 创建命令执行器
+	m.commandExecutor = NewCommandExecutor(m.Logger, m.Config)
 
 	return nil
 }
 
-// Execute 执行模块操作
-func (m *ControlModule) Execute(action string, params map[string]interface{}) (map[string]interface{}, error) {
-	m.logger.Info("执行操作", "action", action)
+// Start 启动模块
+func (m *ControlModule) Start() error {
+	m.Logger.Info("启动终端管控模块")
+	return nil
+}
 
-	switch action {
-	case "list_processes":
-		return m.listProcesses()
+// Stop 停止模块
+func (m *ControlModule) Stop() error {
+	m.Logger.Info("停止终端管控模块")
+	return nil
+}
+
+// HandleRequest 处理请求
+func (m *ControlModule) HandleRequest(ctx context.Context, req *plugin.Request) (*plugin.Response, error) {
+	m.Logger.Info("处理请求", "action", req.Action)
+
+	switch req.Action {
+	case "get_processes":
+		// 获取进程列表
+		processes, err := m.processManager.GetProcesses()
+		if err != nil {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "process_error",
+					Message: err.Error(),
+				},
+			}, nil
+		}
+
+		return &plugin.Response{
+			ID:      req.ID,
+			Success: true,
+			Data: map[string]interface{}{
+				"processes": ProcessesToMap(processes),
+				"count":     len(processes),
+			},
+		}, nil
+
 	case "kill_process":
-		if pid, ok := params["pid"].(float64); ok {
-			return m.processManager.KillProcess(int(pid))
+		// 终止进程
+		pidStr, ok := req.Params["pid"].(string)
+		if !ok {
+			pidFloat, ok := req.Params["pid"].(float64)
+			if !ok {
+				return &plugin.Response{
+					ID:      req.ID,
+					Success: false,
+					Error: &plugin.ErrorInfo{
+						Code:    "invalid_param",
+						Message: "缺少进程ID参数",
+					},
+				}, nil
+			}
+			pidStr = fmt.Sprintf("%d", int(pidFloat))
 		}
-		return nil, fmt.Errorf("缺少进程ID参数")
+
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "invalid_param",
+					Message: "无效的进程ID",
+				},
+			}, nil
+		}
+
+		// 终止进程
+		if err := m.processManager.KillProcess(pid); err != nil {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "kill_error",
+					Message: err.Error(),
+				},
+			}, nil
+		}
+
+		return &plugin.Response{
+			ID:      req.ID,
+			Success: true,
+			Data: map[string]interface{}{
+				"status":  "success",
+				"message": fmt.Sprintf("进程 %d 已终止", pid),
+			},
+		}, nil
+
+	case "find_process":
+		// 根据名称查找进程
+		name, ok := req.Params["name"].(string)
+		if !ok {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "invalid_param",
+					Message: "缺少进程名称参数",
+				},
+			}, nil
+		}
+
+		// 查找进程
+		processes, err := m.processManager.FindProcessByName(name)
+		if err != nil {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "find_error",
+					Message: err.Error(),
+				},
+			}, nil
+		}
+
+		return &plugin.Response{
+			ID:      req.ID,
+			Success: true,
+			Data: map[string]interface{}{
+				"processes": ProcessesToMap(processes),
+				"count":     len(processes),
+			},
+		}, nil
+
 	case "execute_command":
-		if cmd, ok := params["command"].(string); ok {
-			return m.commandManager.ExecuteCommand(cmd)
+		// 执行命令
+		command, ok := req.Params["command"].(string)
+		if !ok {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "invalid_param",
+					Message: "缺少命令参数",
+				},
+			}, nil
 		}
-		return nil, fmt.Errorf("缺少命令参数")
+
+		// 获取参数
+		argsInterface, ok := req.Params["args"].([]interface{})
+		args := make([]string, 0)
+		if ok {
+			for _, arg := range argsInterface {
+				if argStr, ok := arg.(string); ok {
+					args = append(args, argStr)
+				}
+			}
+		}
+
+		// 获取超时
+		timeout := 0
+		if timeoutFloat, ok := req.Params["timeout"].(float64); ok {
+			timeout = int(timeoutFloat)
+		}
+
+		// 执行命令
+		result, err := m.commandExecutor.ExecuteCommand(command, args, timeout)
+		if err != nil {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "execute_error",
+					Message: err.Error(),
+				},
+			}, nil
+		}
+
+		return &plugin.Response{
+			ID:      req.ID,
+			Success: true,
+			Data:    CommandResultToMap(result),
+		}, nil
+
 	case "install_software":
-		if pkg, ok := params["package"].(string); ok {
-			return m.commandManager.InstallSoftware(pkg)
+		// 安装软件
+		packageName, ok := req.Params["package"].(string)
+		if !ok {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "invalid_param",
+					Message: "缺少软件包参数",
+				},
+			}, nil
 		}
-		return nil, fmt.Errorf("缺少软件包参数")
+
+		// 获取超时
+		timeout := 0
+		if timeoutFloat, ok := req.Params["timeout"].(float64); ok {
+			timeout = int(timeoutFloat)
+		}
+
+		// 安装软件
+		result, err := m.commandExecutor.InstallSoftware(packageName, timeout)
+		if err != nil {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "install_error",
+					Message: err.Error(),
+				},
+			}, nil
+		}
+
+		return &plugin.Response{
+			ID:      req.ID,
+			Success: result.Success,
+			Data:    SoftwareInstallResultToMap(result),
+		}, nil
+
 	default:
-		return nil, fmt.Errorf("不支持的操作: %s", action)
+		return &plugin.Response{
+			ID:      req.ID,
+			Success: false,
+			Error: &plugin.ErrorInfo{
+				Code:    "unknown_action",
+				Message: fmt.Sprintf("不支持的操作: %s", req.Action),
+			},
+		}, nil
 	}
 }
 
-// Shutdown 关闭模块
-func (m *ControlModule) Shutdown() error {
-	m.logger.Info("关闭终端管控模块")
-	return nil
-}
+// HandleEvent 处理事件
+func (m *ControlModule) HandleEvent(ctx context.Context, event *plugin.Event) error {
+	m.Logger.Info("处理事件", "type", event.Type, "source", event.Source)
 
-// GetInfo 获取模块信息
-func (m *ControlModule) GetInfo() pluginLib.ModuleInfo {
-	return pluginLib.ModuleInfo{
-		Name:             "control",
-		Version:          "0.1.0",
-		Description:      "终端管控模块，用于管理终端进程和执行命令",
-		SupportedActions: []string{"list_processes", "kill_process", "execute_command", "install_software"},
-	}
-}
+	switch event.Type {
+	case "system.startup":
+		// 系统启动事件
+		m.Logger.Info("系统启动")
+		return nil
 
-// HandleMessage 处理消息
-func (m *ControlModule) HandleMessage(messageType string, messageID string, timestamp int64, payload map[string]interface{}) (map[string]interface{}, error) {
-	m.logger.Info("处理消息", "type", messageType, "id", messageID)
+	case "system.shutdown":
+		// 系统关闭事件
+		m.Logger.Info("系统关闭")
+		return nil
 
-	switch messageType {
-	case "process_list_request":
-		// 处理进程列表请求
-		return m.listProcesses()
-	case "process_kill_request":
-		// 处理进程终止请求
-		if pidFloat, ok := payload["pid"].(float64); ok {
-			return m.processManager.KillProcess(int(pidFloat))
-		}
-		return nil, fmt.Errorf("缺少进程ID参数")
-	case "command_execute_request":
-		// 处理命令执行请求
-		if cmd, ok := payload["command"].(string); ok {
-			return m.commandManager.ExecuteCommand(cmd)
-		}
-		return nil, fmt.Errorf("缺少命令参数")
-	case "software_install_request":
-		// 处理软件安装请求
-		if pkg, ok := payload["package"].(string); ok {
-			return m.commandManager.InstallSoftware(pkg)
-		}
-		return nil, fmt.Errorf("缺少软件包参数")
+	case "process.monitor":
+		// 进程监控事件
+		m.Logger.Info("进程监控")
+		// 在实际应用中，这里可以执行进程监控逻辑
+		return nil
+
 	default:
-		return nil, fmt.Errorf("不支持的消息类型: %s", messageType)
+		// 忽略其他事件
+		return nil
 	}
-}
-
-// listProcesses 列出进程
-func (m *ControlModule) listProcesses() (map[string]interface{}, error) {
-	// 获取缓存过期时间（默认为10秒）
-	cacheExpiration := 10 * time.Second
-	if expStr := utils.GetString(m.config, "process_cache_interval", ""); expStr != "" {
-		if exp, err := time.ParseDuration(expStr); err == nil {
-			cacheExpiration = exp
-		}
-	} else if expSec := utils.GetFloat(m.config, "process_cache_interval", 0); expSec > 0 {
-		cacheExpiration = time.Duration(expSec) * time.Second
-	}
-
-	// 检查缓存是否有效
-	if processes, valid := m.processCache.GetCachedProcesses(cacheExpiration); valid {
-		m.logger.Debug("使用缓存的进程信息")
-
-		// 直接构建map，避免JSON序列化/反序列化
-		result := make(map[string]interface{})
-		result["processes"] = ProcessesToMap(processes)
-
-		return result, nil
-	}
-
-	// 获取进程列表
-	processes, err := m.processManager.ListProcesses()
-	if err != nil {
-		m.logger.Error("列出进程失败", "error", err)
-		return nil, fmt.Errorf("列出进程失败: %w", err)
-	}
-
-	// 更新缓存
-	m.processCache.SetCachedProcesses(processes)
-
-	// 直接构建map，避免JSON序列化/反序列化
-	result := make(map[string]interface{})
-	result["processes"] = ProcessesToMap(processes)
-
-	return result, nil
 }

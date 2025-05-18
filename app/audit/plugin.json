@@ -1,0 +1,17 @@
+{
+  "id": "audit",
+  "name": "安全审计插件",
+  "version": "1.0.0",
+  "description": "安全审计模块，用于记录和管理系统安全事件",
+  "entry_point": {
+    "type": "go",
+    "path": "main.go"
+  },
+  "dependencies": [],
+  "capabilities": ["security_audit"],
+  "supported_platforms": ["windows", "linux", "darwin"],
+  "language": "go",
+  "author": "Kennel Team",
+  "license": "MIT",
+  "min_framework_version": "1.0.0"
+}

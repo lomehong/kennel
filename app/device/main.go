@@ -1,27 +1,35 @@
 package main
 
 import (
-	hplugin "github.com/hashicorp/go-plugin"
-	pluginLib "github.com/lomehong/kennel/pkg/plugin"
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/lomehong/kennel/pkg/core/plugin"
+	sdk "github.com/lomehong/kennel/pkg/sdk/go"
 )
 
-// main 是插件的入口点
 func main() {
-	// 创建插件
-	deviceModule := NewDeviceModule()
+	// 创建设备管理模块
+	module := NewDeviceModule()
 
-	// 启动插件
-	hplugin.Serve(&hplugin.ServeConfig{
-		HandshakeConfig: hplugin.HandshakeConfig{
-			ProtocolVersion:  1,
-			MagicCookieKey:   "APPFRAMEWORK_PLUGIN",
-			MagicCookieValue: "appframework",
+	// 创建默认配置
+	config := &plugin.ModuleConfig{
+		Settings: map[string]interface{}{
+			"log_level":               "info",
+			"monitor_usb":             true,
+			"monitor_network":         true,
+			"monitor_interval":        60,
+			"device_cache_expiration": 30,
 		},
-		Plugins: map[string]hplugin.Plugin{
-			"module": &pluginLib.ModulePlugin{
-				Impl: deviceModule,
-			},
-		},
-		GRPCServer: hplugin.DefaultGRPCServer,
-	})
+	}
+
+	// 初始化模块
+	if err := module.Init(context.Background(), config); err != nil {
+		fmt.Fprintf(os.Stderr, "初始化模块失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 运行模块
+	sdk.RunModule(module)
 }

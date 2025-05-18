@@ -14,8 +14,17 @@ import (
 )
 
 var (
+	// 旧的应用程序变量
 	cfgFile string
 	app     *core.App
+
+	// 新的配置变量
+	configPath string
+	logLevel   string
+	pluginDir  string
+	version    = "1.0.0"
+
+	// 根命令
 	rootCmd = &cobra.Command{
 		Use:   "agent",
 		Short: "跨平台终端代理框架",

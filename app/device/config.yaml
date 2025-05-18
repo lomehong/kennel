@@ -1,0 +1,26 @@
+# 设备管理插件配置
+enabled: true
+
+# 是否监控USB设备
+monitor_usb: true
+
+# 是否监控网络接口
+monitor_network: true
+
+# 是否允许禁用网络接口
+allow_network_disable: true
+
+# 设备缓存过期时间（秒）
+device_cache_expiration: 30
+
+# 设备监控间隔（秒）
+monitor_interval: 60
+
+# 日志级别
+log_level: "info"
+
+# 网络接口白名单（不允许禁用）
+protected_interfaces:
+  - "lo"
+  - "eth0"
+  - "en0"

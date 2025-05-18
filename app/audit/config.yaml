@@ -1,0 +1,43 @@
+# 安全审计插件配置
+enabled: true
+
+# 是否记录系统事件
+log_system_events: true
+
+# 是否记录用户事件
+log_user_events: true
+
+# 是否记录网络事件
+log_network_events: true
+
+# 是否记录文件事件
+log_file_events: true
+
+# 日志保留天数
+log_retention_days: 30
+
+# 日志级别
+log_level: "info"
+
+# 是否启用实时警报
+enable_alerts: false
+
+# 警报接收者
+alert_recipients:
+  - "admin@example.com"
+
+# 日志存储
+storage:
+  # 存储类型: file, database
+  type: "file"
+  
+  # 文件存储配置
+  file:
+    # 日志目录
+    dir: "data/audit/logs"
+    
+    # 日志文件名格式
+    filename_format: "audit-%Y-%m-%d.log"
+    
+    # 是否压缩旧日志
+    compress: true

@@ -1,0 +1,18 @@
+{
+  "id": "example-python",
+  "name": "Python示例插件",
+  "version": "1.0.0",
+  "description": "使用Python实现的示例插件",
+  "entry_point": {
+    "type": "python",
+    "path": "main.py",
+    "interpreter": "python"
+  },
+  "dependencies": [],
+  "capabilities": ["example"],
+  "supported_platforms": ["windows", "linux", "darwin"],
+  "language": "python",
+  "author": "Kennel Team",
+  "license": "MIT",
+  "min_framework_version": "1.0.0"
+}

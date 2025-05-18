@@ -1,0 +1,17 @@
+{
+  "id": "example-go",
+  "name": "Go示例插件",
+  "version": "1.0.0",
+  "description": "使用Go实现的示例插件",
+  "entry_point": {
+    "type": "go",
+    "path": "main.go"
+  },
+  "dependencies": [],
+  "capabilities": ["example"],
+  "supported_platforms": ["windows", "linux", "darwin"],
+  "language": "go",
+  "author": "Kennel Team",
+  "license": "MIT",
+  "min_framework_version": "1.0.0"
+}

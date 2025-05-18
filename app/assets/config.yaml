@@ -1,0 +1,22 @@
+# 资产管理插件配置
+enabled: true
+
+# 收集间隔（秒）
+collect_interval: 3600
+
+# 上报服务器
+report_server: "https://example.com/api/assets"
+
+# 是否启用自动上报
+auto_report: false
+
+# 日志级别
+log_level: "info"
+
+# 缓存设置
+cache:
+  # 是否启用缓存
+  enabled: true
+  
+  # 缓存目录
+  dir: "data/assets/cache"

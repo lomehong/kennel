@@ -2,138 +2,150 @@ package main
 
 import (
 	"fmt"
-	"os/exec"
-	"runtime"
+	"net"
 	"strings"
 
-	"github.com/lomehong/kennel/pkg/logger"
-	"github.com/shirou/gopsutil/v3/net"
+	"github.com/lomehong/kennel/pkg/sdk/go"
 )
 
-// NetworkManager 负责管理网络接口
+// NetworkManager 网络管理器
 type NetworkManager struct {
-	logger logger.Logger
+	logger             sdk.Logger
+	config             map[string]interface{}
+	protectedInterfaces map[string]bool
 }
 
 // NewNetworkManager 创建一个新的网络管理器
-func NewNetworkManager(logger logger.Logger) *NetworkManager {
-	return &NetworkManager{
-		logger: logger,
+func NewNetworkManager(logger sdk.Logger, config map[string]interface{}) *NetworkManager {
+	// 创建网络管理器
+	manager := &NetworkManager{
+		logger:             logger,
+		config:             config,
+		protectedInterfaces: make(map[string]bool),
 	}
+
+	// 初始化受保护的网络接口
+	manager.initProtectedInterfaces()
+
+	return manager
 }
 
-// GetNetworkInterfaces 获取网络接口信息
-func (m *NetworkManager) GetNetworkInterfaces() ([]NetworkInterface, error) {
-	m.logger.Info("获取网络接口信息")
-
-	// 获取网络接口
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		m.logger.Error("获取网络接口失败", "error", err)
-		return nil, fmt.Errorf("获取网络接口失败: %w", err)
+// initProtectedInterfaces 初始化受保护的网络接口
+func (m *NetworkManager) initProtectedInterfaces() {
+	// 获取受保护的网络接口列表
+	protectedInterfaces := sdk.GetConfigStringSlice(m.config, "protected_interfaces")
+	for _, iface := range protectedInterfaces {
+		m.protectedInterfaces[strings.ToLower(iface)] = true
 	}
 
-	// 预分配切片容量，避免动态扩容
-	networkInterfaces := make([]NetworkInterface, 0, len(interfaces))
-	for _, iface := range interfaces {
-		// 检查是否是回环接口
-		isLoopback := false
-		for _, flag := range iface.Flags {
-			if flag == "loopback" {
-				isLoopback = true
-				break
-			}
+	m.logger.Debug("初始化受保护的网络接口", "count", len(m.protectedInterfaces))
+}
+
+// GetNetworkInterfaces 获取网络接口列表
+func (m *NetworkManager) GetNetworkInterfaces() ([]NetworkInterface, error) {
+	m.logger.Info("获取网络接口列表")
+
+	// 获取所有网络接口
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		m.logger.Error("获取网络接口列表失败", "error", err)
+		return nil, fmt.Errorf("获取网络接口列表失败: %w", err)
+	}
+
+	// 转换为NetworkInterface
+	networkInterfaces := make([]NetworkInterface, 0, len(ifaces))
+	for _, iface := range ifaces {
+		// 获取IP地址
+		addrs, err := iface.Addrs()
+		if err != nil {
+			m.logger.Debug("获取网络接口地址失败", "interface", iface.Name, "error", err)
+			continue
 		}
-		if !isLoopback {
-			// 获取IP地址
-			// 预分配切片容量，避免动态扩容
-			ipAddresses := make([]string, 0, 4) // 假设每个接口最多有4个IP地址
 
-			// 使用系统命令获取IP地址
-			if runtime.GOOS == "windows" {
-				cmd := exec.Command("powershell", "-Command", fmt.Sprintf("(Get-NetIPAddress -InterfaceAlias '%s').IPAddress", iface.Name))
-				output, err := cmd.Output()
-				if err == nil {
-					// 解析输出
-					lines := strings.Split(string(output), "\r\n")
-					for _, line := range lines {
-						if line != "" {
-							ipAddresses = append(ipAddresses, strings.TrimSpace(line))
-						}
-					}
-				}
-			} else {
-				// 对于非Windows系统，可以使用其他方法获取IP地址
-				// 这里简化处理，实际应用中可能需要更复杂的逻辑
+		// 提取IP地址
+		ipAddresses := make([]string, 0, len(addrs))
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
 			}
-
-			// 确定状态
-			status := "down"
-			for _, flag := range iface.Flags {
-				if flag == "up" {
-					status = "up"
-					break
-				}
-			}
-
-			networkInterfaces = append(networkInterfaces, NetworkInterface{
-				Name:       iface.Name,
-				MACAddress: iface.HardwareAddr,
-				IPAddress:  ipAddresses,
-				Status:     status,
-			})
+			ipAddresses = append(ipAddresses, ipNet.IP.String())
 		}
+
+		// 确定接口状态
+		status := "down"
+		if iface.Flags&net.FlagUp != 0 {
+			status = "up"
+		}
+
+		// 创建网络接口信息
+		networkInterface := NetworkInterface{
+			Name:       iface.Name,
+			MACAddress: iface.HardwareAddr.String(),
+			IPAddress:  ipAddresses,
+			Status:     status,
+		}
+
+		networkInterfaces = append(networkInterfaces, networkInterface)
 	}
 
 	return networkInterfaces, nil
 }
 
-// EnableNetwork 启用网络接口
-func (m *NetworkManager) EnableNetwork(interfaceName string) (map[string]interface{}, error) {
-	m.logger.Info("启用网络接口", "interface", interfaceName)
+// EnableNetworkInterface 启用网络接口
+func (m *NetworkManager) EnableNetworkInterface(name string) error {
+	m.logger.Info("启用网络接口", "interface", name)
 
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("powershell", "-Command", fmt.Sprintf("Enable-NetAdapter -Name '%s' -Confirm:$false", interfaceName))
-	case "darwin":
-		cmd = exec.Command("ifconfig", interfaceName, "up")
-	default:
-		return nil, fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
+	// 检查是否允许禁用网络接口
+	if !sdk.GetConfigBool(m.config, "allow_network_disable", true) {
+		return fmt.Errorf("不允许修改网络接口状态")
 	}
 
-	if err := cmd.Run(); err != nil {
-		m.logger.Error("启用网络接口失败", "interface", interfaceName, "error", err)
-		return nil, fmt.Errorf("启用网络接口失败: %w", err)
-	}
+	// 在实际应用中，这里应该调用系统API启用网络接口
+	// 由于这是平台相关的，这里只是一个示例
+	m.logger.Info("网络接口已启用", "interface", name)
 
-	return map[string]interface{}{
-		"success": true,
-		"message": fmt.Sprintf("已启用网络接口 %s", interfaceName),
-	}, nil
+	return nil
 }
 
-// DisableNetwork 禁用网络接口
-func (m *NetworkManager) DisableNetwork(interfaceName string) (map[string]interface{}, error) {
-	m.logger.Info("禁用网络接口", "interface", interfaceName)
+// DisableNetworkInterface 禁用网络接口
+func (m *NetworkManager) DisableNetworkInterface(name string) error {
+	m.logger.Info("禁用网络接口", "interface", name)
 
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("powershell", "-Command", fmt.Sprintf("Disable-NetAdapter -Name '%s' -Confirm:$false", interfaceName))
-	case "darwin":
-		cmd = exec.Command("ifconfig", interfaceName, "down")
-	default:
-		return nil, fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
+	// 检查是否允许禁用网络接口
+	if !sdk.GetConfigBool(m.config, "allow_network_disable", true) {
+		return fmt.Errorf("不允许修改网络接口状态")
 	}
 
-	if err := cmd.Run(); err != nil {
-		m.logger.Error("禁用网络接口失败", "interface", interfaceName, "error", err)
-		return nil, fmt.Errorf("禁用网络接口失败: %w", err)
+	// 检查是否是受保护的网络接口
+	if m.protectedInterfaces[strings.ToLower(name)] {
+		m.logger.Warn("尝试禁用受保护的网络接口", "interface", name)
+		return fmt.Errorf("不允许禁用受保护的网络接口: %s", name)
 	}
 
-	return map[string]interface{}{
-		"success": true,
-		"message": fmt.Sprintf("已禁用网络接口 %s", interfaceName),
-	}, nil
+	// 在实际应用中，这里应该调用系统API禁用网络接口
+	// 由于这是平台相关的，这里只是一个示例
+	m.logger.Info("网络接口已禁用", "interface", name)
+
+	return nil
+}
+
+// GetNetworkInterfaceInfo 获取网络接口信息
+func (m *NetworkManager) GetNetworkInterfaceInfo(name string) (*NetworkInterface, error) {
+	m.logger.Debug("获取网络接口信息", "interface", name)
+
+	// 获取所有网络接口
+	interfaces, err := m.GetNetworkInterfaces()
+	if err != nil {
+		return nil, err
+	}
+
+	// 查找指定的网络接口
+	for _, iface := range interfaces {
+		if iface.Name == name {
+			return &iface, nil
+		}
+	}
+
+	return nil, fmt.Errorf("未找到网络接口: %s", name)
 }

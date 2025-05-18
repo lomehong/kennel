@@ -1,0 +1,17 @@
+{
+  "id": "control",
+  "name": "终端管控插件",
+  "version": "1.0.0",
+  "description": "终端管控模块，用于远程执行命令、管理进程和安装软件",
+  "entry_point": {
+    "type": "go",
+    "path": "main.go"
+  },
+  "dependencies": [],
+  "capabilities": ["terminal_control"],
+  "supported_platforms": ["windows", "darwin"],
+  "language": "go",
+  "author": "Kennel Team",
+  "license": "MIT",
+  "min_framework_version": "1.0.0"
+}

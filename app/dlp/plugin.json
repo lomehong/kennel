@@ -1,0 +1,17 @@
+{
+  "id": "dlp",
+  "name": "数据防泄漏插件",
+  "version": "1.0.0",
+  "description": "数据防泄漏模块，用于检测和防止敏感数据泄漏",
+  "entry_point": {
+    "type": "go",
+    "path": "main.go"
+  },
+  "dependencies": [],
+  "capabilities": ["data_loss_prevention"],
+  "supported_platforms": ["windows", "darwin"],
+  "language": "go",
+  "author": "Kennel Team",
+  "license": "MIT",
+  "min_framework_version": "1.0.0"
+}

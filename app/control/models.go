@@ -73,3 +73,45 @@ func ProcessesToMap(processes []ProcessInfo) []map[string]interface{} {
 	
 	return processesMap
 }
+
+// CommandResult 命令执行结果
+type CommandResult struct {
+	Command  string `json:"command"`
+	ExitCode int    `json:"exit_code"`
+	Output   string `json:"output"`
+	Error    string `json:"error"`
+	Duration int64  `json:"duration_ms"` // 执行时间（毫秒）
+}
+
+// CommandResultToMap 将命令执行结果转换为map
+func CommandResultToMap(result *CommandResult) map[string]interface{} {
+	return map[string]interface{}{
+		"command":     result.Command,
+		"exit_code":   result.ExitCode,
+		"output":      result.Output,
+		"error":       result.Error,
+		"duration_ms": result.Duration,
+	}
+}
+
+// SoftwareInstallResult 软件安装结果
+type SoftwareInstallResult struct {
+	Package  string `json:"package"`
+	Success  bool   `json:"success"`
+	ExitCode int    `json:"exit_code"`
+	Output   string `json:"output"`
+	Error    string `json:"error"`
+	Duration int64  `json:"duration_ms"` // 安装时间（毫秒）
+}
+
+// SoftwareInstallResultToMap 将软件安装结果转换为map
+func SoftwareInstallResultToMap(result *SoftwareInstallResult) map[string]interface{} {
+	return map[string]interface{}{
+		"package":     result.Package,
+		"success":     result.Success,
+		"exit_code":   result.ExitCode,
+		"output":      result.Output,
+		"error":       result.Error,
+		"duration_ms": result.Duration,
+	}
+}
