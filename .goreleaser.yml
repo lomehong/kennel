@@ -1,0 +1,148 @@
+# GoReleaser配置文件
+# 详细文档：https://goreleaser.com
+
+# 构建配置
+builds:
+  # 主程序
+  - id: agent
+    main: ./cmd/agent/main.go
+    binary: agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+  # 资产管理插件
+  - id: assets
+    main: ./app/assets/main.go
+    binary: assets
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+  # 设备管理插件
+  - id: device
+    main: ./app/device/main.go
+    binary: device
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+  # 数据防泄漏插件
+  - id: dlp
+    main: ./app/dlp/main.go
+    binary: dlp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+  # 终端管控插件
+  - id: control
+    main: ./app/control/main.go
+    binary: control
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+  # 安全审计插件
+  - id: audit
+    main: ./app/audit/main.go
+    binary: audit
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+# 归档配置
+archives:
+  - id: default
+    name_template: "appframework_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - config.yaml
+      - README.md
+      - LICENSE
+      - src: web/dist/**/*
+        dst: web/dist
+
+# 检查和验证
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# 发布配置
+release:
+  github:
+    owner: yourusername
+    name: appframework
+  draft: true
+  prerelease: auto
+  name_template: "AppFramework v{{ .Version }}"
+
+# 快照配置
+snapshot:
+  name_template: "{{ .Tag }}-next"
+
+# 变更日志配置
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+
+# 钩子配置
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+    # Web前端构建由release.ps1脚本处理，这里不再重复执行
+
+# 使用自定义脚本处理构建后的文件
+# 我们将使用release.ps1脚本中的自定义命令来处理文件，而不是在goreleaser配置中处理

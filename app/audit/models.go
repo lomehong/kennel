@@ -1,0 +1,75 @@
+package main
+
+import (
+	"time"
+)
+
+// AuditLog 表示一条审计日志
+type AuditLog struct {
+	Timestamp time.Time              `json:"timestamp"`
+	EventType string                 `json:"event_type"`
+	User      string                 `json:"user"`
+	Details   map[string]interface{} `json:"details"`
+}
+
+// AuditLogStore 管理审计日志存储
+type AuditLogStore struct {
+	logs []AuditLog
+}
+
+// NewAuditLogStore 创建一个新的审计日志存储
+func NewAuditLogStore() *AuditLogStore {
+	return &AuditLogStore{
+		logs: make([]AuditLog, 0),
+	}
+}
+
+// AddLog 添加一条审计日志
+func (s *AuditLogStore) AddLog(log AuditLog) {
+	s.logs = append(s.logs, log)
+}
+
+// GetLogs 获取所有审计日志
+func (s *AuditLogStore) GetLogs() []AuditLog {
+	// 返回一个副本，避免外部修改
+	logsCopy := make([]AuditLog, len(s.logs))
+	copy(logsCopy, s.logs)
+	return logsCopy
+}
+
+// FilterLogs 根据条件过滤审计日志
+func (s *AuditLogStore) FilterLogs(eventType, user string) []AuditLog {
+	// 过滤日志
+	filteredLogs := make([]AuditLog, 0)
+	for _, log := range s.logs {
+		if eventType != "" && log.EventType != eventType {
+			continue
+		}
+		if user != "" && log.User != user {
+			continue
+		}
+		filteredLogs = append(filteredLogs, log)
+	}
+	return filteredLogs
+}
+
+// ClearLogs 清除所有审计日志，但保留清除事件
+func (s *AuditLogStore) ClearLogs(clearEvent AuditLog) {
+	s.logs = []AuditLog{clearEvent}
+}
+
+// LogsToMap 将审计日志转换为map切片
+func LogsToMap(logs []AuditLog) []map[string]interface{} {
+	// 转换日志为map切片
+	logsMap := make([]map[string]interface{}, len(logs))
+	for i, log := range logs {
+		logMap := make(map[string]interface{})
+		logMap["timestamp"] = log.Timestamp
+		logMap["event_type"] = log.EventType
+		logMap["user"] = log.User
+		logMap["details"] = log.Details
+		logsMap[i] = logMap
+	}
+	
+	return logsMap
+}

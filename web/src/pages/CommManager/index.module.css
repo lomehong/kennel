@@ -1,0 +1,110 @@
+.container {
+  padding: 16px;
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.statusCard {
+  margin-bottom: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.09);
+  border-radius: 8px;
+  transition: all 0.3s;
+}
+
+.statusCard:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.statusInfo {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.statusLabel {
+  font-weight: bold;
+  margin-right: 12px;
+  width: 90px;
+  color: #666;
+}
+
+.statusValue {
+  flex: 1;
+  font-size: 16px;
+}
+
+.statusActions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.actionButton {
+  margin-left: 12px;
+  min-width: 100px;
+  height: 36px;
+  font-size: 14px;
+  border-radius: 4px;
+  transition: all 0.3s;
+}
+
+.actionButton:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.tabContent {
+  padding: 16px 0;
+}
+
+.logTable {
+  margin-top: 16px;
+}
+
+.logLevel {
+  font-weight: bold;
+}
+
+.logTime {
+  color: #888;
+  font-size: 12px;
+}
+
+.logMessage {
+  word-break: break-word;
+}
+
+.statsItem {
+  margin-bottom: 16px;
+}
+
+.statsLabel {
+  font-weight: bold;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.statsValue {
+  font-size: 16px;
+}
+
+.configItem {
+  margin-bottom: 16px;
+}
+
+.configLabel {
+  font-weight: bold;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.configValue {
+  font-size: 16px;
+  word-break: break-word;
+}

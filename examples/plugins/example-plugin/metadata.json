@@ -1,0 +1,20 @@
+{
+  "ID": "example-plugin",
+  "Name": "Example Plugin",
+  "Version": "1.0.0",
+  "Author": "Example Author",
+  "Description": "Example plugin for demonstration",
+  "Dependencies": [],
+  "Tags": ["example", "demo"],
+  "Path": "",
+  "EntryPoint": "main.go",
+  "IsolationLevel": "none",
+  "AutoStart": true,
+  "AutoRestart": false,
+  "Enabled": true,
+  "Config": {
+    "setting1": "value1",
+    "setting2": 42,
+    "setting3": true
+  }
+}

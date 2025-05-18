@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package plugin;
+
+option go_package = "github.com/lomehong/kennel/pkg/plugin/proto/gen";
+
+// Module 定义了插件模块的通用接口
+service Module {
+  // 初始化模块
+  rpc Init(InitRequest) returns (InitResponse);
+
+  // 执行模块操作
+  rpc Execute(ActionRequest) returns (ActionResponse);
+
+  // 关闭模块
+  rpc Shutdown(EmptyRequest) returns (EmptyRequest);
+
+  // 获取模块信息
+  rpc GetInfo(EmptyRequest) returns (ModuleInfo);
+
+  // HandleMessage 处理消息
+  rpc HandleMessage(MessageRequest) returns (MessageResponse);
+}
+
+// 空消息，用于不需要参数的请求
+message EmptyRequest {}
+
+// 初始化请求
+message InitRequest {
+  // 配置信息，JSON格式
+  string config = 1;
+}
+
+// 初始化响应
+message InitResponse {
+  // 初始化是否成功
+  bool success = 1;
+  // 错误信息，如果有
+  string error_message = 2;
+}
+
+// 操作请求
+message ActionRequest {
+  // 操作类型
+  string action = 1;
+  // 操作参数，JSON格式
+  string params = 2;
+}
+
+// 操作响应
+message ActionResponse {
+  // 操作是否成功
+  bool success = 1;
+  // 操作结果，JSON格式
+  string result = 2;
+  // 错误信息，如果有
+  string error_message = 3;
+}
+
+// 模块信息
+message ModuleInfo {
+  // 模块名称
+  string name = 1;
+  // 模块版本
+  string version = 2;
+  // 模块描述
+  string description = 3;
+  // 支持的操作列表
+  repeated string supported_actions = 4;
+}
+
+// 消息请求
+message MessageRequest {
+  // 消息类型
+  string message_type = 1;
+  // 消息ID
+  string message_id = 2;
+  // 时间戳
+  int64 timestamp = 3;
+  // 消息内容，JSON格式
+  string payload = 4;
+}
+
+// 消息响应
+message MessageResponse {
+  // 处理是否成功
+  bool success = 1;
+  // 错误信息，如果有
+  string error_message = 2;
+  // 响应内容，JSON格式
+  string response = 3;
+}
