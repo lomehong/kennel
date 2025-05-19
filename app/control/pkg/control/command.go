@@ -1,4 +1,4 @@
-package main
+package control
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lomehong/kennel/pkg/sdk/go"
+	sdk "github.com/lomehong/kennel/pkg/sdk/go"
 )
 
 // CommandExecutor 命令执行器

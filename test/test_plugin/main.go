@@ -104,8 +104,8 @@ func main() {
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{
 			ProtocolVersion:  1,
-			MagicCookieKey:   "APPFRAMEWORK_PLUGIN",
-			MagicCookieValue: "appframework",
+			MagicCookieKey:   "PLUGIN_MAGIC_COOKIE",
+			MagicCookieValue: "kennel",
 		},
 		Plugins: map[string]plugin.Plugin{
 			"module": &pluginLib.ModulePlugin{Impl: testPlugin},

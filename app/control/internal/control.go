@@ -1,19 +1,21 @@
-package main
+package internal
 
 import (
 	"context"
 	"fmt"
 	"strconv"
 
+	"github.com/lomehong/kennel/app/control/ai"
 	"github.com/lomehong/kennel/pkg/core/plugin"
-	"github.com/lomehong/kennel/pkg/sdk/go"
+	sdk "github.com/lomehong/kennel/pkg/sdk/go"
 )
 
 // ControlModule 实现了终端管控模块
 type ControlModule struct {
 	*sdk.BaseModule
-	processManager *ProcessManager
+	processManager  *ProcessManager
 	commandExecutor *CommandExecutor
+	aiManager       *ai.AIManager
 }
 
 // NewControlModule 创建一个新的终端管控模块
@@ -53,12 +55,22 @@ func (m *ControlModule) Init(ctx context.Context, config *plugin.ModuleConfig) e
 	// 创建命令执行器
 	m.commandExecutor = NewCommandExecutor(m.Logger, m.Config)
 
+	// 创建AI管理器
+	m.aiManager = ai.NewAIManager(m.Logger, m.Config)
+
 	return nil
 }
 
 // Start 启动模块
 func (m *ControlModule) Start() error {
 	m.Logger.Info("启动终端管控模块")
+
+	// 初始化AI管理器
+	if err := m.aiManager.Init(context.Background()); err != nil {
+		m.Logger.Error("初始化AI管理器失败", "error", err)
+		// 不返回错误，允许模块继续启动
+	}
+
 	return nil
 }
 
@@ -71,6 +83,76 @@ func (m *ControlModule) Stop() error {
 // HandleRequest 处理请求
 func (m *ControlModule) HandleRequest(ctx context.Context, req *plugin.Request) (*plugin.Response, error) {
 	m.Logger.Info("处理请求", "action", req.Action)
+
+	// 处理AI相关请求
+	if req.Action == "ai_query" {
+		// 获取查询参数
+		query, ok := req.Params["query"].(string)
+		if !ok {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "invalid_param",
+					Message: "缺少查询参数",
+				},
+			}, nil
+		}
+
+		// 处理流式请求
+		streaming, _ := req.Params["streaming"].(bool)
+		if streaming {
+			// 创建流式响应通道
+			responseChan := make(chan string)
+			errorChan := make(chan error, 1)
+
+			// 启动流式处理
+			go func() {
+				err := m.aiManager.HandleStreamRequest(ctx, query, func(content string) error {
+					responseChan <- content
+					return nil
+				})
+				if err != nil {
+					errorChan <- err
+					close(responseChan)
+					return
+				}
+				close(responseChan)
+			}()
+
+			// 返回流式响应
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: true,
+				Data: map[string]interface{}{
+					"streaming": true,
+					"channel":   responseChan,
+					"error":     errorChan,
+				},
+			}, nil
+		}
+
+		// 处理非流式请求
+		response, err := m.aiManager.HandleRequest(ctx, query)
+		if err != nil {
+			return &plugin.Response{
+				ID:      req.ID,
+				Success: false,
+				Error: &plugin.ErrorInfo{
+					Code:    "ai_error",
+					Message: err.Error(),
+				},
+			}, nil
+		}
+
+		return &plugin.Response{
+			ID:      req.ID,
+			Success: true,
+			Data: map[string]interface{}{
+				"response": response,
+			},
+		}, nil
+	}
 
 	switch req.Action {
 	case "get_processes":
@@ -147,131 +229,6 @@ func (m *ControlModule) HandleRequest(ctx context.Context, req *plugin.Request) 
 			},
 		}, nil
 
-	case "find_process":
-		// 根据名称查找进程
-		name, ok := req.Params["name"].(string)
-		if !ok {
-			return &plugin.Response{
-				ID:      req.ID,
-				Success: false,
-				Error: &plugin.ErrorInfo{
-					Code:    "invalid_param",
-					Message: "缺少进程名称参数",
-				},
-			}, nil
-		}
-
-		// 查找进程
-		processes, err := m.processManager.FindProcessByName(name)
-		if err != nil {
-			return &plugin.Response{
-				ID:      req.ID,
-				Success: false,
-				Error: &plugin.ErrorInfo{
-					Code:    "find_error",
-					Message: err.Error(),
-				},
-			}, nil
-		}
-
-		return &plugin.Response{
-			ID:      req.ID,
-			Success: true,
-			Data: map[string]interface{}{
-				"processes": ProcessesToMap(processes),
-				"count":     len(processes),
-			},
-		}, nil
-
-	case "execute_command":
-		// 执行命令
-		command, ok := req.Params["command"].(string)
-		if !ok {
-			return &plugin.Response{
-				ID:      req.ID,
-				Success: false,
-				Error: &plugin.ErrorInfo{
-					Code:    "invalid_param",
-					Message: "缺少命令参数",
-				},
-			}, nil
-		}
-
-		// 获取参数
-		argsInterface, ok := req.Params["args"].([]interface{})
-		args := make([]string, 0)
-		if ok {
-			for _, arg := range argsInterface {
-				if argStr, ok := arg.(string); ok {
-					args = append(args, argStr)
-				}
-			}
-		}
-
-		// 获取超时
-		timeout := 0
-		if timeoutFloat, ok := req.Params["timeout"].(float64); ok {
-			timeout = int(timeoutFloat)
-		}
-
-		// 执行命令
-		result, err := m.commandExecutor.ExecuteCommand(command, args, timeout)
-		if err != nil {
-			return &plugin.Response{
-				ID:      req.ID,
-				Success: false,
-				Error: &plugin.ErrorInfo{
-					Code:    "execute_error",
-					Message: err.Error(),
-				},
-			}, nil
-		}
-
-		return &plugin.Response{
-			ID:      req.ID,
-			Success: true,
-			Data:    CommandResultToMap(result),
-		}, nil
-
-	case "install_software":
-		// 安装软件
-		packageName, ok := req.Params["package"].(string)
-		if !ok {
-			return &plugin.Response{
-				ID:      req.ID,
-				Success: false,
-				Error: &plugin.ErrorInfo{
-					Code:    "invalid_param",
-					Message: "缺少软件包参数",
-				},
-			}, nil
-		}
-
-		// 获取超时
-		timeout := 0
-		if timeoutFloat, ok := req.Params["timeout"].(float64); ok {
-			timeout = int(timeoutFloat)
-		}
-
-		// 安装软件
-		result, err := m.commandExecutor.InstallSoftware(packageName, timeout)
-		if err != nil {
-			return &plugin.Response{
-				ID:      req.ID,
-				Success: false,
-				Error: &plugin.ErrorInfo{
-					Code:    "install_error",
-					Message: err.Error(),
-				},
-			}, nil
-		}
-
-		return &plugin.Response{
-			ID:      req.ID,
-			Success: result.Success,
-			Data:    SoftwareInstallResultToMap(result),
-		}, nil
-
 	default:
 		return &plugin.Response{
 			ID:      req.ID,
@@ -292,6 +249,12 @@ func (m *ControlModule) HandleEvent(ctx context.Context, event *plugin.Event) er
 	case "system.startup":
 		// 系统启动事件
 		m.Logger.Info("系统启动")
+
+		// 初始化AI管理器
+		if err := m.aiManager.Init(ctx); err != nil {
+			m.Logger.Error("初始化AI管理器失败", "error", err)
+		}
+
 		return nil
 
 	case "system.shutdown":

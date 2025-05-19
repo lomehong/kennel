@@ -10,6 +10,9 @@ import (
 )
 
 func main() {
+	// 设置环境变量，确保插件使用正确的 Magic Cookie
+	os.Setenv("PLUGIN_MAGIC_COOKIE", "kennel")
+
 	// 创建安全审计模块
 	module := NewAuditModule()
 

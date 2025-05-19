@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
+	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/lomehong/kennel/pkg/core/plugin"
+	pluginLib "github.com/lomehong/kennel/pkg/plugin"
 )
 
 // BaseModule 基础模块实现
@@ -106,9 +106,8 @@ func (m *BaseModule) CheckHealth() plugin.HealthStatus {
 
 // RunModule 运行模块
 func RunModule(module plugin.Module) {
-	// 设置信号处理
-	signalCh := make(chan os.Signal, 1)
-	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+	// 设置环境变量，确保插件使用正确的 Magic Cookie
+	os.Setenv("APPFRAMEWORK_PLUGIN", "appframework")
 
 	// 启动模块
 	if err := module.Start(); err != nil {
@@ -116,14 +115,23 @@ func RunModule(module plugin.Module) {
 		os.Exit(1)
 	}
 
-	// 等待信号
-	<-signalCh
-
-	// 停止模块
-	if err := module.Stop(); err != nil {
-		fmt.Fprintf(os.Stderr, "停止模块失败: %v\n", err)
-		os.Exit(1)
+	// 创建适配器
+	adapter := &ModuleAdapter{
+		Module: module,
 	}
+
+	// 启动插件服务
+	goplugin.Serve(&goplugin.ServeConfig{
+		HandshakeConfig: goplugin.HandshakeConfig{
+			ProtocolVersion:  1,
+			MagicCookieKey:   "APPFRAMEWORK_PLUGIN",
+			MagicCookieValue: "appframework",
+		},
+		Plugins: map[string]goplugin.Plugin{
+			"module": &pluginLib.ModulePlugin{Impl: adapter},
+		},
+		GRPCServer: goplugin.DefaultGRPCServer,
+	})
 }
 
 // GetConfigString 获取配置字符串

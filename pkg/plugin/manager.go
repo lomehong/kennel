@@ -3,12 +3,15 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
+	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/lomehong/kennel/pkg/concurrency"
 	"github.com/lomehong/kennel/pkg/errors"
 	"github.com/lomehong/kennel/pkg/resource"
@@ -170,45 +173,94 @@ func NewPluginManager(options ...PluginManagerOption) *PluginManager {
 
 // LoadPlugin 加载插件
 func (pm *PluginManager) LoadPlugin(config *PluginConfig) (*ManagedPlugin, error) {
+	pm.logger.Info("开始加载插件", "id", config.ID, "name", config.Name, "version", config.Version, "path", config.Path)
+
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
 	// 检查插件是否已加载
 	if _, exists := pm.plugins[config.ID]; exists {
+		pm.logger.Warn("插件已加载", "id", config.ID)
 		return nil, fmt.Errorf("插件 %s 已加载", config.ID)
 	}
 
+	// 构建插件路径
+	pluginPath := filepath.Join(pm.pluginsDir, config.Path, config.ID+".exe")
+	pm.logger.Debug("尝试插件路径", "id", config.ID, "path", pluginPath)
+
+	// 检查插件可执行文件是否存在
+	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
+		pm.logger.Debug("插件可执行文件不存在，尝试替代路径", "id", config.ID, "path", pluginPath)
+
+		// 尝试其他可能的路径
+		alternativePath := filepath.Join(pm.pluginsDir, config.Path, "bin", config.ID+".exe")
+		pm.logger.Debug("尝试替代路径1", "id", config.ID, "path", alternativePath)
+
+		if _, err := os.Stat(alternativePath); os.IsNotExist(err) {
+			// 再尝试一个路径
+			alternativePath = filepath.Join(pm.pluginsDir, config.Path, "cmd", config.ID, config.ID+".exe")
+			pm.logger.Debug("尝试替代路径2", "id", config.ID, "path", alternativePath)
+
+			if _, err := os.Stat(alternativePath); os.IsNotExist(err) {
+				// 最后尝试直接使用插件ID作为路径
+				alternativePath = filepath.Join(pm.pluginsDir, config.ID, config.ID+".exe")
+				pm.logger.Debug("尝试替代路径3", "id", config.ID, "path", alternativePath)
+
+				if _, err := os.Stat(alternativePath); os.IsNotExist(err) {
+					pm.logger.Error("插件可执行文件不存在", "id", config.ID, "path", pluginPath)
+					return nil, fmt.Errorf("插件可执行文件不存在: %s", pluginPath)
+				}
+				pluginPath = alternativePath
+			} else {
+				pluginPath = alternativePath
+			}
+		} else {
+			pluginPath = alternativePath
+		}
+	}
+
+	pm.logger.Info("找到插件可执行文件", "id", config.ID, "path", pluginPath)
+
 	// 创建插件沙箱
+	pm.logger.Debug("创建插件沙箱", "id", config.ID)
 	sandbox := NewPluginSandbox(config.ID, pm.isolator,
 		WithSandboxLogger(pm.logger.Named(fmt.Sprintf("sandbox-%s", config.ID))),
 		WithSandboxContext(pm.ctx),
 	)
 
 	// 创建受管理的插件
+	pm.logger.Debug("创建受管理的插件", "id", config.ID)
 	managedPlugin := &ManagedPlugin{
 		ID:        config.ID,
 		Name:      config.Name,
 		Version:   config.Version,
-		Path:      filepath.Join(pm.pluginsDir, config.Path),
+		Path:      pluginPath,
 		Sandbox:   sandbox,
 		Config:    config,
 		State:     PluginStateInitializing,
 		StartTime: time.Now(),
+		Client:    nil, // 将在启动时设置
 	}
 
 	// 存储插件
 	pm.plugins[config.ID] = managedPlugin
 	pm.sandboxes[config.ID] = sandbox
 
-	pm.logger.Info("插件已加载", "id", config.ID, "name", config.Name, "version", config.Version)
+	pm.logger.Info("插件已加载", "id", config.ID, "name", config.Name, "version", config.Version, "auto_start", config.AutoStart)
 
 	// 如果配置为自动启动，则启动插件
 	if config.AutoStart {
+		pm.logger.Info("插件配置为自动启动", "id", config.ID)
 		go func() {
+			pm.logger.Debug("开始自动启动插件", "id", config.ID)
 			if err := pm.StartPlugin(config.ID); err != nil {
 				pm.logger.Error("自动启动插件失败", "id", config.ID, "error", err)
+			} else {
+				pm.logger.Info("自动启动插件成功", "id", config.ID)
 			}
 		}()
+	} else {
+		pm.logger.Info("插件未配置自动启动", "id", config.ID)
 	}
 
 	return managedPlugin, nil
@@ -216,30 +268,106 @@ func (pm *PluginManager) LoadPlugin(config *PluginConfig) (*ManagedPlugin, error
 
 // StartPlugin 启动插件
 func (pm *PluginManager) StartPlugin(id string) error {
+	pm.logger.Info("开始启动插件", "id", id)
+
 	pm.mu.Lock()
 	plugin, exists := pm.plugins[id]
 	if !exists {
 		pm.mu.Unlock()
+		pm.logger.Error("插件不存在", "id", id)
 		return fmt.Errorf("插件 %s 不存在", id)
 	}
 
 	// 检查插件状态
 	if plugin.State == PluginStateRunning {
 		pm.mu.Unlock()
+		pm.logger.Warn("插件已在运行", "id", id)
 		return fmt.Errorf("插件 %s 已在运行", id)
 	}
 
 	// 更新插件状态
 	plugin.State = PluginStateInitializing
 	plugin.StartTime = time.Now()
+
+	// 获取插件路径
+	pluginPath := plugin.Path
 	pm.mu.Unlock()
 
-	// 启动插件（这里简化为设置状态）
-	// 在实际实现中，这里应该启动插件进程
-	plugin.Sandbox.SetState(PluginStateRunning)
-	plugin.State = PluginStateRunning
+	pm.logger.Debug("插件路径", "id", id, "path", pluginPath)
 
-	pm.logger.Info("插件已启动", "id", id)
+	// 检查插件可执行文件是否存在
+	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
+		pm.logger.Error("插件可执行文件不存在", "id", id, "path", pluginPath, "error", err)
+		return fmt.Errorf("插件可执行文件不存在: %s", pluginPath)
+	}
+
+	pm.logger.Debug("创建插件客户端", "id", id)
+
+	// 创建插件客户端
+	client := goplugin.NewClient(&goplugin.ClientConfig{
+		HandshakeConfig: goplugin.HandshakeConfig{
+			ProtocolVersion:  1,
+			MagicCookieKey:   "PLUGIN_MAGIC_COOKIE",
+			MagicCookieValue: "kennel",
+		},
+		Plugins:  PluginMap,
+		Cmd:      exec.Command(pluginPath),
+		Logger:   pm.logger.Named(fmt.Sprintf("plugin-%s", id)),
+		AutoMTLS: true,
+		// 添加调试选项
+		AllowedProtocols: []goplugin.Protocol{
+			goplugin.ProtocolGRPC,
+			goplugin.ProtocolNetRPC,
+		},
+		SyncStdout: os.Stdout,
+		SyncStderr: os.Stderr,
+		// 增加启动超时时间
+		StartTimeout: 2 * time.Minute,
+	})
+
+	pm.logger.Debug("连接到插件", "id", id)
+
+	// 连接到插件
+	pm.logger.Debug("开始连接到插件", "id", id, "path", pluginPath)
+	rpcClient, err := client.Client()
+	if err != nil {
+		pm.logger.Error("连接到插件失败", "id", id, "error", err, "path", pluginPath)
+		// 检查插件进程是否存在
+		if client.Exited() {
+			pm.logger.Error("插件进程已退出", "id", id)
+		}
+		return fmt.Errorf("连接到插件失败: %w", err)
+	}
+	pm.logger.Debug("成功连接到插件", "id", id)
+
+	pm.logger.Debug("获取插件实例", "id", id)
+
+	// 获取插件实例
+	// 尝试使用插件ID作为插件类型
+	pm.logger.Debug("尝试使用插件ID作为插件类型", "id", id)
+	instance, err := rpcClient.Dispense(id)
+	if err != nil {
+		pm.logger.Debug("使用插件ID作为插件类型失败，尝试使用'module'", "id", id, "error", err)
+		// 如果失败，尝试使用"module"作为插件类型
+		instance, err = rpcClient.Dispense("module")
+		if err != nil {
+			pm.logger.Error("获取插件实例失败", "id", id, "error", err)
+			client.Kill()
+			return fmt.Errorf("获取插件实例失败: %w", err)
+		}
+	}
+
+	pm.logger.Debug("更新插件状态", "id", id)
+
+	// 更新插件状态
+	pm.mu.Lock()
+	plugin.Client = client
+	plugin.Interface = instance
+	plugin.State = PluginStateRunning
+	plugin.Sandbox.SetState(PluginStateRunning)
+	pm.mu.Unlock()
+
+	pm.logger.Info("插件已启动", "id", id, "path", pluginPath)
 	return nil
 }
 

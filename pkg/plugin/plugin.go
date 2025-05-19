@@ -61,6 +61,12 @@ func (p *ModulePlugin) GRPCClient(ctx context.Context, broker *plugin.GRPCBroker
 // PluginMap 是插件类型到插件实现的映射
 var PluginMap = map[string]plugin.Plugin{
 	"module": &ModulePlugin{},
+	// 添加其他可能的插件类型
+	"assets":  &ModulePlugin{},
+	"audit":   &ModulePlugin{},
+	"control": &ModulePlugin{},
+	"device":  &ModulePlugin{},
+	"dlp":     &ModulePlugin{},
 }
 
 // ConfigToJSON 将配置转换为JSON字符串

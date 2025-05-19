@@ -1,0 +1,38 @@
+{
+  "id": "control",
+  "name": "终端管控插件",
+  "version": "1.0.0",
+  "settings": {
+    "log_level": "info",
+    "allow_remote_command": true,
+    "command_timeout": 30,
+    "allowed_commands": ["ipconfig", "ping", "netstat", "tasklist", "dir", "systeminfo", "echo", "whoami", "hostname"],
+    "protected_processes": ["system", "explorer", "winlogon", "services", "lsass"],
+    "process_cache_expiration": 10,
+    "ai": {
+      "enabled": true,
+      "model_type": "openai",
+      "model_name": "gpt-3.5-turbo",
+      "api_key": "your-api-key-here",
+      "base_url": "",
+      "max_tokens": 2000,
+      "temperature": 0.7,
+      "mcp_enabled": true,
+      "mcp_server_addr": "http://localhost:8080",
+      "mcp_api_key": "your-mcp-api-key-here"
+    },
+    "ai_ark_example": {
+      "enabled": true,
+      "model_type": "ark",
+      "model_name": "ark-model-name",
+      "api_key": "your-ark-api-key-here",
+      "base_url": "https://api.ark-example.com",
+      "max_tokens": 2000,
+      "temperature": 0.7,
+      "mcp_enabled": true,
+      "mcp_server_addr": "http://localhost:8080",
+      "mcp_api_key": "your-mcp-api-key-here"
+    }
+  },
+  "dependencies": []
+}

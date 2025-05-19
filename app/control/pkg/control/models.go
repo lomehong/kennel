@@ -1,4 +1,4 @@
-package main
+package control
 
 import (
 	"sync"
@@ -34,16 +34,16 @@ func NewProcessCache() *ProcessCache {
 func (c *ProcessCache) GetCachedProcesses(cacheExpiration time.Duration) ([]ProcessInfo, bool) {
 	c.cacheMutex.RLock()
 	defer c.cacheMutex.RUnlock()
-	
+
 	cacheValid := c.cachedProcesses != nil && time.Since(c.cacheTime) < cacheExpiration
 	if !cacheValid {
 		return nil, false
 	}
-	
+
 	// 返回一个副本，避免外部修改
 	processesCopy := make([]ProcessInfo, len(c.cachedProcesses))
 	copy(processesCopy, c.cachedProcesses)
-	
+
 	return processesCopy, true
 }
 
@@ -51,7 +51,7 @@ func (c *ProcessCache) GetCachedProcesses(cacheExpiration time.Duration) ([]Proc
 func (c *ProcessCache) SetCachedProcesses(processes []ProcessInfo) {
 	c.cacheMutex.Lock()
 	defer c.cacheMutex.Unlock()
-	
+
 	c.cachedProcesses = processes
 	c.cacheTime = time.Now()
 }
@@ -70,7 +70,7 @@ func ProcessesToMap(processes []ProcessInfo) []map[string]interface{} {
 		processMap["user"] = process.User
 		processesMap[i] = processMap
 	}
-	
+
 	return processesMap
 }
 

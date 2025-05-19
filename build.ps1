@@ -59,14 +59,22 @@ function Build-Plugin {
     param (
         [string]$Name,
         [string]$SourceDir,
-        [string]$OutputPath
+        [string]$OutputPath,
+        [string]$MainFile = ""
     )
 
     Write-InfoLog "构建${Name}插件..."
     try {
         # 切换到插件目录，然后构建
         Push-Location $SourceDir
-        go build -o (Join-Path $PWD.Path $OutputPath)
+
+        # 如果指定了主文件，则使用它进行构建
+        if ($MainFile -ne "") {
+            go build -o (Join-Path $PWD.Path $OutputPath) $MainFile
+        } else {
+            go build -o (Join-Path $PWD.Path $OutputPath)
+        }
+
         if ($LASTEXITCODE -ne 0) {
             Pop-Location
             throw "构建${Name}插件失败"
@@ -86,7 +94,7 @@ function Build-Plugin {
 Build-Plugin -Name "资产管理" -SourceDir "app\assets" -OutputPath "..\..\bin\app\assets\assets.exe"
 Build-Plugin -Name "设备管理" -SourceDir "app\device" -OutputPath "..\..\bin\app\device\device.exe"
 Build-Plugin -Name "数据防泄漏" -SourceDir "app\dlp" -OutputPath "..\..\bin\app\dlp\dlp.exe"
-Build-Plugin -Name "终端管控" -SourceDir "app\control" -OutputPath "..\..\bin\app\control\control.exe"
+Build-Plugin -Name "终端管控" -SourceDir "app\control\cmd\control" -OutputPath "..\..\bin\app\control\control.exe"
 Build-Plugin -Name "安全审计" -SourceDir "app\audit" -OutputPath "..\..\bin\app\audit\audit.exe"
 
 # 构建Web前端

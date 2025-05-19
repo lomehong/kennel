@@ -40,6 +40,9 @@ type App struct {
 	// 插件管理器
 	pluginManager *plugin.PluginManager
 
+	// 插件注册表
+	pluginRegistry *PluginRegistry
+
 	// 通讯管理器
 	commManager *CommManager
 
@@ -143,6 +146,13 @@ func NewApp(configFile string) *App {
 		ctx:               ctx,
 		cancel:            cancel,
 	}
+
+	// 创建插件注册表
+	pluginDir := configManager.GetString("plugin_dir")
+	if pluginDir == "" {
+		pluginDir = "app"
+	}
+	app.pluginRegistry = NewPluginRegistry(logger, pluginDir)
 
 	// 初始化超时控制器
 	app.initTimeoutController()
@@ -356,65 +366,24 @@ func (app *App) Start() error {
 		app.Stop()
 	}()
 
-	// 并发初始化每个启用的模块
+	// 并发初始化模块
 	var wg sync.WaitGroup
 
-	// 定义模块初始化函数
-	initModule := func(name string, enabled bool) {
-		if !enabled {
-			return
-		}
+	// 从配置中加载插件
+	app.logger.Info("从配置中加载插件")
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			// 添加超时控制，避免初始化时间过长
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-
-			// 创建结果通道
-			resultCh := make(chan error, 1)
-
-			go func() {
-				if _, ok := app.pluginManager.GetPlugin(name); ok {
-					app.logger.Info("初始化模块", "name", name)
-					// 在实际应用中，这里可能需要实现模块初始化
-					resultCh <- nil
-				} else {
-					app.logger.Warn("模块未加载，尝试加载模块", "name", name)
-
-					// 尝试加载模块
-					err := app.loadModule(name)
-					if err != nil {
-						app.logger.Error("加载模块失败", "name", name, "error", err)
-						resultCh <- err
-					} else {
-						app.logger.Info("加载模块成功", "name", name)
-						resultCh <- nil
-					}
-				}
-			}()
-
-			// 等待结果或超时
-			select {
-			case <-ctx.Done():
-				app.logger.Error("初始化模块超时", "name", name)
-			case err := <-resultCh:
-				if err != nil {
-					app.logger.Error("初始化模块失败", "name", name, "error", err)
-				} else {
-					app.logger.Info("初始化模块成功", "name", name)
-				}
-			}
-		}()
+	// 使用新的插件加载机制
+	if err := app.LoadPluginsFromConfig(); err != nil {
+		app.logger.Error("加载插件失败", "error", err)
 	}
 
-	// 初始化各个模块
-	initModule("assets", app.configManager.GetBool("enable_assets"))
-	initModule("device", app.configManager.GetBool("enable_device"))
-	initModule("dlp", app.configManager.GetBool("enable_dlp"))
-	initModule("control", app.configManager.GetBool("enable_control"))
+	// 检查是否加载了任何插件
+	if len(app.pluginManager.ListPlugins()) == 0 {
+		app.logger.Info("没有从配置中加载任何插件，尝试加载自动发现的插件")
+		if err := app.loadDiscoveredPlugins(); err != nil {
+			app.logger.Error("加载自动发现的插件失败", "error", err)
+		}
+	}
 
 	// 等待所有模块初始化完成
 	wg.Wait()
@@ -713,44 +682,7 @@ func (app *App) GetContextResourceTracker() *resource.ContextResourceTracker {
 	return nil
 }
 
-// loadModule 加载模块
-func (app *App) loadModule(name string) error {
-	app.logger.Info("加载模块", "name", name)
-
-	// 检查模块目录是否存在
-	pluginDir := app.configManager.GetString("plugin_dir")
-	if pluginDir == "" {
-		pluginDir = "app"
-	}
-
-	// 创建一个模拟的插件配置
-	pluginConfig := &plugin.PluginConfig{
-		ID:        name,
-		Name:      name,
-		Version:   "1.0.0",
-		Path:      name,
-		AutoStart: true,
-		Enabled:   true,
-	}
-
-	// 使用插件管理器的LoadPlugin方法加载插件
-	_, err := app.pluginManager.LoadPlugin(pluginConfig)
-	if err != nil {
-		app.logger.Error("加载插件失败", "name", name, "error", err)
-
-		// 如果加载失败，记录错误并继续
-		app.logger.Error("加载插件模块失败", "name", name, "error", err)
-
-		// 在实际项目中，应该尝试从备用位置加载插件
-		// 或者使用插件的默认实现
-		app.logger.Info("尝试从备用位置加载插件", "name", name)
-
-		// 如果仍然失败，记录错误并继续
-		app.logger.Warn("无法加载插件模块", "name", name)
-	}
-
-	return nil
-}
+// 已移动到 app_plugins.go
 
 // 已删除模拟模块实现，使用真实的插件模块
 

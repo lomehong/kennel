@@ -10,6 +10,9 @@ import (
 )
 
 func main() {
+	// 设置环境变量，确保插件使用正确的 Magic Cookie
+	os.Setenv("PLUGIN_MAGIC_COOKIE", "kennel")
+
 	// 创建数据防泄漏模块
 	module := NewDLPModule()
 
