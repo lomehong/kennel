@@ -1,0 +1,25 @@
+# 插件配置
+id: hello
+name: Hello Plugin
+version: 1.0.0
+enabled: true
+log_level: info
+
+# 隔离配置
+isolation:
+  level: basic
+  resources:
+    memory: 256000000  # 256MB
+    cpu: 50            # 50% CPU
+  timeout: 30s
+  working_dir: ./data
+  environment:
+    DEBUG: "false"
+    PLUGIN_MODE: "production"
+
+# 插件特定配置
+settings:
+  message: "Hello, Kennel!"
+  interval: 5
+  debug_port: 8080
+  debug_enabled: true

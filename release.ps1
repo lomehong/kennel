@@ -89,9 +89,77 @@ try {
     # Web前端构建失败不中断整个发布过程
 }
 
+# 确保Go依赖已安装
+Write-InfoLog "确保Go依赖已安装..."
+
+# 设置GOPROXY环境变量以解决网络问题
+$originalGoproxy = $env:GOPROXY
+Write-InfoLog "设置GOPROXY环境变量以解决网络问题..."
+$env:GOPROXY = "https://goproxy.cn,https://goproxy.io,direct"
+
+# 添加重试机制
+$maxRetries = 3
+$retryCount = 0
+$success = $false
+
+while (-not $success -and $retryCount -lt $maxRetries) {
+    try {
+        Write-InfoLog "尝试获取依赖 (尝试 $($retryCount + 1)/$maxRetries)..."
+        # 修复：移除 -timeout 参数，它不是 go get 命令的有效参数
+        go get -v github.com/mitchellh/mapstructure github.com/Masterminds/semver/v3
+        go get -v ./...
+        $success = $true
+        Write-SuccessLog "依赖获取成功"
+    } catch {
+        $retryCount++
+        if ($retryCount -lt $maxRetries) {
+            Write-WarningLog "获取依赖失败，将在5秒后重试: $_"
+            Start-Sleep -Seconds 5
+        } else {
+            Write-ErrorLog "获取依赖失败，已达到最大重试次数: $_"
+            Write-InfoLog "尝试继续发布过程..."
+        }
+    }
+}
+
+# 恢复原始GOPROXY环境变量
+$env:GOPROXY = $originalGoproxy
+
 # 运行GoReleaser
 Write-InfoLog "运行GoReleaser..."
-goreleaser release --snapshot --clean --skip=publish
+try {
+    $goreleaseOutput = goreleaser release --snapshot --clean --skip=publish 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-ErrorLog "GoReleaser执行失败，错误输出:"
+        Write-Host $goreleaseOutput -ForegroundColor Red
+
+        # 尝试诊断问题
+        if ($goreleaseOutput -match "no required module provides package") {
+            Write-InfoLog "检测到缺少依赖，尝试安装..."
+            $missingPackages = [regex]::Matches($goreleaseOutput, "no required module provides package ([^;]+)")
+            foreach ($package in $missingPackages) {
+                $packageName = $package.Groups[1].Value.Trim()
+                Write-WarningLog "缺少依赖包: $packageName"
+                Write-InfoLog "尝试安装缺少的依赖: $packageName"
+                go get -v $packageName
+            }
+
+            # 重新尝试运行GoReleaser
+            Write-InfoLog "重新尝试运行GoReleaser..."
+            goreleaser release --snapshot --clean --skip=publish
+            if ($LASTEXITCODE -ne 0) {
+                throw "重新运行GoReleaser失败"
+            }
+        } else {
+            throw "GoReleaser执行失败"
+        }
+    }
+    Write-SuccessLog "GoReleaser执行成功"
+} catch {
+    Write-ErrorLog "GoReleaser执行失败: $_"
+    Write-ErrorLog "请检查错误信息，或者尝试手动运行 'goreleaser release --snapshot --clean --skip=publish' 查看详细错误信息"
+    # 继续执行后续步骤，尝试完成尽可能多的工作
+}
 
 # 后处理：移动插件到正确的目录
 Write-InfoLog "移动插件到正确的目录..."

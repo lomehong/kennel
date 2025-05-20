@@ -1,4 +1,4 @@
-# AppFramework 构建脚本
+# kennel 构建脚本
 # 用于构建主程序、插件模块和Web前端
 
 # 设置错误处理
@@ -25,7 +25,7 @@ function Write-WarningLog {
     Write-Host $Message -ForegroundColor Yellow
 }
 
-Write-SuccessLog "开始构建 AppFramework..."
+Write-SuccessLog "开始构建 kennel..."
 
 # 创建输出目录
 Write-InfoLog "创建输出目录..."
@@ -39,18 +39,80 @@ New-Item -ItemType Directory -Path bin\web -Force | Out-Null
 
 # 获取Go依赖
 Write-InfoLog "获取Go依赖..."
-go get -v ./...
+Write-InfoLog "确保必要的依赖已安装..."
+
+# 设置GOPROXY环境变量以解决网络问题
+$originalGoproxy = $env:GOPROXY
+Write-InfoLog "设置GOPROXY环境变量以解决网络问题..."
+$env:GOPROXY = "https://goproxy.cn,https://goproxy.io,direct"
+
+# 添加重试机制
+$maxRetries = 3
+$retryCount = 0
+$success = $false
+
+while (-not $success -and $retryCount -lt $maxRetries) {
+    try {
+        Write-InfoLog "尝试获取依赖 (尝试 $($retryCount + 1)/$maxRetries)..."
+        # 修复：移除 -timeout 参数，它不是 go get 命令的有效参数
+        go get -v github.com/mitchellh/mapstructure github.com/Masterminds/semver/v3
+        go get -v ./...
+        $success = $true
+        Write-SuccessLog "依赖获取成功"
+    } catch {
+        $retryCount++
+        if ($retryCount -lt $maxRetries) {
+            Write-WarningLog "获取依赖失败，将在5秒后重试: $_"
+            Start-Sleep -Seconds 5
+        } else {
+            Write-ErrorLog "获取依赖失败，已达到最大重试次数: $_"
+            Write-InfoLog "尝试继续构建过程..."
+        }
+    }
+}
+
+# 恢复原始GOPROXY环境变量
+$env:GOPROXY = $originalGoproxy
 
 # 构建主程序
 Write-InfoLog "构建主程序..."
 try {
-    go build -o bin\agent.exe cmd\agent\main.go
+    # 先检查是否有编译错误
+    Write-InfoLog "检查编译错误..."
+    $buildOutput = go build -o bin\agent.exe cmd\agent\main.go 2>&1
+
     if ($LASTEXITCODE -ne 0) {
-        throw "构建主程序失败"
+        Write-ErrorLog "构建主程序失败，错误输出:"
+        Write-Host $buildOutput -ForegroundColor Red
+
+        # 尝试诊断问题
+        Write-InfoLog "尝试诊断问题..."
+
+        # 检查是否有缺少的依赖
+        if ($buildOutput -match "no required module provides package") {
+            $missingPackages = [regex]::Matches($buildOutput, "no required module provides package ([^;]+)")
+            foreach ($package in $missingPackages) {
+                $packageName = $package.Groups[1].Value.Trim()
+                Write-WarningLog "缺少依赖包: $packageName"
+                Write-InfoLog "尝试安装缺少的依赖: $packageName"
+                go get -v $packageName
+            }
+
+            # 重新尝试构建
+            Write-InfoLog "重新尝试构建主程序..."
+            go build -o bin\agent.exe cmd\agent\main.go
+            if ($LASTEXITCODE -ne 0) {
+                throw "重新构建主程序失败"
+            }
+        } else {
+            throw "构建主程序失败"
+        }
     }
+
     Write-SuccessLog "主程序构建成功"
 } catch {
     Write-ErrorLog "构建主程序失败: $_"
+    Write-ErrorLog "请检查代码中的错误，或者尝试手动运行 'go build cmd/agent/main.go' 查看详细错误信息"
     exit 1
 }
 
@@ -65,20 +127,62 @@ function Build-Plugin {
 
     Write-InfoLog "构建${Name}插件..."
     try {
+        # 检查源目录是否存在
+        if (-not (Test-Path $SourceDir)) {
+            throw "插件源目录不存在: $SourceDir"
+        }
+
         # 切换到插件目录，然后构建
         Push-Location $SourceDir
 
+        # 创建输出目录（如果不存在）
+        $outputDir = Split-Path -Parent (Join-Path $PWD.Path $OutputPath)
+        if (-not (Test-Path $outputDir)) {
+            New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+        }
+
         # 如果指定了主文件，则使用它进行构建
         if ($MainFile -ne "") {
-            go build -o (Join-Path $PWD.Path $OutputPath) $MainFile
+            $buildOutput = go build -o (Join-Path $PWD.Path $OutputPath) $MainFile 2>&1
         } else {
-            go build -o (Join-Path $PWD.Path $OutputPath)
+            $buildOutput = go build -o (Join-Path $PWD.Path $OutputPath) 2>&1
         }
 
         if ($LASTEXITCODE -ne 0) {
-            Pop-Location
-            throw "构建${Name}插件失败"
+            Write-ErrorLog "构建${Name}插件失败，错误输出:"
+            Write-Host $buildOutput -ForegroundColor Red
+
+            # 尝试诊断问题
+            Write-InfoLog "尝试诊断${Name}插件构建问题..."
+
+            # 检查是否有缺少的依赖
+            if ($buildOutput -match "no required module provides package") {
+                $missingPackages = [regex]::Matches($buildOutput, "no required module provides package ([^;]+)")
+                foreach ($package in $missingPackages) {
+                    $packageName = $package.Groups[1].Value.Trim()
+                    Write-WarningLog "缺少依赖包: $packageName"
+                    Write-InfoLog "尝试安装缺少的依赖: $packageName"
+                    go get -v $packageName
+                }
+
+                # 重新尝试构建
+                Write-InfoLog "重新尝试构建${Name}插件..."
+                if ($MainFile -ne "") {
+                    go build -o (Join-Path $PWD.Path $OutputPath) $MainFile
+                } else {
+                    go build -o (Join-Path $PWD.Path $OutputPath)
+                }
+
+                if ($LASTEXITCODE -ne 0) {
+                    Pop-Location
+                    throw "重新构建${Name}插件失败"
+                }
+            } else {
+                Pop-Location
+                throw "构建${Name}插件失败"
+            }
         }
+
         Pop-Location
         Write-SuccessLog "${Name}插件构建成功"
     } catch {
@@ -86,6 +190,7 @@ function Build-Plugin {
             Pop-Location
         }
         Write-WarningLog "构建${Name}插件失败: $_"
+        Write-WarningLog "请检查插件代码中的错误，或者尝试手动进入目录 '$SourceDir' 运行 'go build' 查看详细错误信息"
         # 插件构建失败不中断整个构建过程
     }
 }
