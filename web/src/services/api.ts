@@ -27,7 +27,7 @@ const getBaseUrl = () => {
 // 创建axios实例
 const api = axios.create({
   baseURL: getBaseUrl(),
-  timeout: 10000,
+  timeout: 30000, // 增加超时时间到30秒，避免系统资源API超时
   headers: {
     'Content-Type': 'application/json',
   },
@@ -142,7 +142,12 @@ export const systemApi = {
   getSystemStatus: () => api.get('/system/status'),
 
   // 获取资源使用情况
-  getSystemResources: () => api.get('/system/resources'),
+  getSystemResources: () => api.get('/system/resources', {
+    timeout: 60000, // 为系统资源API单独设置更长的超时时间（60秒）
+    headers: {
+      'Cache-Control': 'no-cache', // 禁用缓存
+    },
+  }),
 
   // 获取系统日志
   getSystemLogs: (limit = 100, offset = 0, level = '', source = '') =>

@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -109,7 +110,41 @@ func (mc *MetricsCollector) GetSystemResources() (map[string]interface{}, error)
 
 // GetSystemStatus 获取系统状态
 func (mc *MetricsCollector) GetSystemStatus() (map[string]interface{}, error) {
-	return mc.monitor.GetSystemStatus()
+	// 设置超时上下文，防止方法执行时间过长
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 创建一个通道用于接收结果
+	resultChan := make(chan map[string]interface{}, 1)
+	errChan := make(chan error, 1)
+
+	// 在后台协程中执行状态收集
+	go func() {
+		status, err := mc.monitor.GetSystemStatus()
+		if err != nil {
+			errChan <- err
+			return
+		}
+		resultChan <- status
+	}()
+
+	// 等待结果或超时
+	select {
+	case <-ctx.Done():
+		// 超时处理
+		mc.logger.Error("获取系统状态超时")
+		return map[string]interface{}{
+			"error":     "获取系统状态超时",
+			"timestamp": time.Now().Format(time.RFC3339),
+		}, ctx.Err()
+	case err := <-errChan:
+		return map[string]interface{}{
+			"error":     "获取系统状态失败: " + err.Error(),
+			"timestamp": time.Now().Format(time.RFC3339),
+		}, err
+	case result := <-resultChan:
+		return result, nil
+	}
 }
 
 // GetSystemLogs 获取系统日志

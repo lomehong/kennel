@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -14,7 +15,6 @@ import (
 	"github.com/shirou/gopsutil/v3/load"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/net"
-	"github.com/shirou/gopsutil/v3/process"
 )
 
 // Monitor 系统监控器，负责收集系统指标
@@ -113,102 +113,115 @@ func (m *Monitor) GetSystemMetrics() (map[string]interface{}, error) {
 
 // GetSystemResources 获取系统资源详细信息
 func (m *Monitor) GetSystemResources() (map[string]interface{}, error) {
-	resources := make(map[string]interface{})
+	// 添加互斥锁保护，防止并发访问问题
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 
-	// 获取CPU信息
-	cpuInfo, err := cpu.Info()
-	if err != nil {
-		m.logger.Error("获取CPU信息失败", "error", err)
-	} else {
-		cpuPercent, _ := cpu.Percent(0, false)
-		cpuTemp, _ := host.SensorsTemperatures()
+	// 设置超时上下文，防止方法执行时间过长
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-		var temperature float64
-		for _, temp := range cpuTemp {
-			if temp.SensorKey == "coretemp_packageid0_input" {
-				temperature = temp.Temperature
-				break
-			}
-		}
+	// 创建一个通道用于接收结果
+	resultChan := make(chan map[string]interface{}, 1)
 
+	// 在后台协程中执行资源收集
+	go func() {
+		resources := make(map[string]interface{})
+		var err error
+
+		// 获取CPU信息 - 简化版，避免耗时操作
 		resources["cpu"] = map[string]interface{}{
 			"cores":       runtime.NumCPU(),
-			"usage_pct":   cpuPercent[0],
-			"temperature": temperature,
-			"frequency":   cpuInfo[0].Mhz,
-		}
-	}
-
-	// 获取内存信息
-	memInfo, err := mem.VirtualMemory()
-	if err != nil {
-		m.logger.Error("获取内存信息失败", "error", err)
-	} else {
-		resources["memory"] = map[string]interface{}{
-			"total":    memInfo.Total,
-			"used":     memInfo.Used,
-			"free":     memInfo.Free,
-			"used_pct": memInfo.UsedPercent,
-			"cached":   memInfo.Cached,
-			"buffers":  memInfo.Buffers,
-		}
-	}
-
-	// 获取磁盘信息
-	diskInfo, err := disk.Usage("/")
-	if err != nil {
-		m.logger.Error("获取磁盘信息失败", "error", err)
-	} else {
-		diskIO, _ := disk.IOCounters()
-		var readRate, writeRate uint64
-		for _, io := range diskIO {
-			readRate += io.ReadBytes
-			writeRate += io.WriteBytes
+			"usage_pct":   0.0, // 默认值
+			"temperature": 0.0, // 默认值
+			"frequency":   0.0, // 默认值
 		}
 
-		resources["disk"] = map[string]interface{}{
-			"total":      diskInfo.Total,
-			"used":       diskInfo.Used,
-			"free":       diskInfo.Free,
-			"used_pct":   diskInfo.UsedPercent,
-			"read_rate":  readRate,
-			"write_rate": writeRate,
+		// 尝试获取CPU使用率
+		cpuPercent, err := cpu.Percent(0, false)
+		if err == nil && len(cpuPercent) > 0 {
+			resources["cpu"].(map[string]interface{})["usage_pct"] = cpuPercent[0]
 		}
-	}
 
-	// 获取进程信息
-	processes, err := process.Processes()
-	if err != nil {
-		m.logger.Error("获取进程信息失败", "error", err)
-	} else {
-		var threadCount int32
-		for _, p := range processes {
-			numThreads, err := p.NumThreads()
-			if err == nil {
-				threadCount += numThreads
+		// 获取内存信息
+		memInfo, err := mem.VirtualMemory()
+		if err == nil {
+			resources["memory"] = map[string]interface{}{
+				"total":    memInfo.Total,
+				"used":     memInfo.Used,
+				"free":     memInfo.Free,
+				"used_pct": memInfo.UsedPercent,
+				"cached":   memInfo.Cached,
+				"buffers":  memInfo.Buffers,
+			}
+		} else {
+			resources["memory"] = map[string]interface{}{
+				"total":    0,
+				"used":     0,
+				"free":     0,
+				"used_pct": 0.0,
+				"cached":   0,
+				"buffers":  0,
 			}
 		}
 
-		resources["process"] = map[string]interface{}{
-			"count":      len(processes),
-			"threads":    threadCount,
+		// 获取磁盘信息
+		diskInfo, err := disk.Usage("/")
+		if err == nil {
+			resources["disk"] = map[string]interface{}{
+				"total":      diskInfo.Total,
+				"used":       diskInfo.Used,
+				"free":       diskInfo.Free,
+				"used_pct":   diskInfo.UsedPercent,
+				"read_rate":  0, // 默认值
+				"write_rate": 0, // 默认值
+			}
+		} else {
+			resources["disk"] = map[string]interface{}{
+				"total":      0,
+				"used":       0,
+				"free":       0,
+				"used_pct":   0.0,
+				"read_rate":  0,
+				"write_rate": 0,
+			}
+		}
+
+		// 获取运行时信息 - 这些操作很快
+		resources["runtime"] = map[string]interface{}{
+			"go_version": runtime.Version(),
+			"go_os":      runtime.GOOS,
+			"go_arch":    runtime.GOARCH,
+			"cpu_cores":  runtime.NumCPU(),
 			"goroutines": runtime.NumGoroutine(),
 		}
+
+		// 添加进程信息 - 简化版，避免遍历所有进程
+		resources["process"] = map[string]interface{}{
+			"count":      0, // 默认值
+			"threads":    0, // 默认值
+			"goroutines": runtime.NumGoroutine(),
+		}
+
+		// 添加时间戳
+		resources["timestamp"] = time.Now().Format(time.RFC3339)
+
+		// 发送结果
+		resultChan <- resources
+	}()
+
+	// 等待结果或超时
+	select {
+	case <-ctx.Done():
+		// 超时处理
+		m.logger.Error("获取系统资源超时")
+		return map[string]interface{}{
+			"error":     "获取系统资源超时",
+			"timestamp": time.Now().Format(time.RFC3339),
+		}, ctx.Err()
+	case result := <-resultChan:
+		return result, nil
 	}
-
-	// 获取运行时信息
-	resources["runtime"] = map[string]interface{}{
-		"go_version": runtime.Version(),
-		"go_os":      runtime.GOOS,
-		"go_arch":    runtime.GOARCH,
-		"cpu_cores":  runtime.NumCPU(),
-		"goroutines": runtime.NumGoroutine(),
-	}
-
-	// 添加时间戳
-	resources["timestamp"] = time.Now().Format(time.RFC3339)
-
-	return resources, nil
 }
 
 // GetSystemStatus 获取系统状态

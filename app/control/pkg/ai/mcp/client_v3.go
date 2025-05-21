@@ -13,8 +13,8 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
 
-// ClientConfig 定义了 MCP Client 的配置
-type ClientConfig struct {
+// ClientV3Config 定义了 MCP Client V3 的配置
+type ClientV3Config struct {
 	ServerAddr    string        // 服务器地址，例如 http://localhost:8080
 	Timeout       time.Duration // 请求超时，默认为 10 秒
 	APIKey        string        // API 密钥，用于认证
@@ -25,18 +25,18 @@ type ClientConfig struct {
 	StreamMode    bool          // 是否使用流式模式
 }
 
-// Client 实现了 MCP Client
-type Client struct {
-	config     *ClientConfig
+// ClientV3 实现了 MCP Client V3
+type ClientV3 struct {
+	config     *ClientV3Config
 	httpClient *http.Client
 	logger     sdk.Logger
 	mcpClient  *client.Client
 }
 
-// NewClient 创建一个新的 MCP Client
-func NewClient(config *ClientConfig, logger sdk.Logger) (*Client, error) {
+// NewClientV3 创建一个新的 MCP Client V3
+func NewClientV3(config *ClientV3Config, logger sdk.Logger) (*ClientV3, error) {
 	if config == nil {
-		config = &ClientConfig{}
+		config = &ClientV3Config{}
 	}
 
 	// 设置默认值
@@ -83,7 +83,7 @@ func NewClient(config *ClientConfig, logger sdk.Logger) (*Client, error) {
 		return nil, fmt.Errorf("创建 MCP 客户端失败: %w", err)
 	}
 
-	return &Client{
+	return &ClientV3{
 		config:     config,
 		httpClient: httpClient,
 		logger:     logger,
@@ -91,8 +91,44 @@ func NewClient(config *ClientConfig, logger sdk.Logger) (*Client, error) {
 	}, nil
 }
 
+// Start 启动客户端
+func (c *ClientV3) Start(ctx context.Context) error {
+	c.logger.Debug("启动 MCP 客户端")
+
+	// 启动 MCP 客户端
+	if err := c.mcpClient.Start(ctx); err != nil {
+		return fmt.Errorf("启动 MCP 客户端失败: %w", err)
+	}
+
+	// 初始化 MCP 客户端
+	initReq := mcplib.InitializeRequest{}
+
+	// 设置客户端信息
+	initReq.Params.ClientInfo = mcplib.Implementation{
+		Name:    "Kennel Control Plugin",
+		Version: "1.0.0",
+	}
+
+	// 设置协议版本和能力
+	initReq.Params.ProtocolVersion = "0.4.0"
+	initReq.Params.Capabilities = mcplib.ClientCapabilities{}
+
+	_, err := c.mcpClient.Initialize(ctx, initReq)
+	if err != nil {
+		return fmt.Errorf("初始化 MCP 客户端失败: %w", err)
+	}
+
+	return nil
+}
+
+// Close 关闭客户端
+func (c *ClientV3) Close() error {
+	c.logger.Debug("关闭 MCP 客户端")
+	return c.mcpClient.Close()
+}
+
 // ListTools 列出所有工具
-func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
+func (c *ClientV3) ListTools(ctx context.Context) ([]ToolInfo, error) {
 	c.logger.Debug("获取工具列表")
 
 	// 创建请求
@@ -111,9 +147,9 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
 			params := make(map[string]Parameter)
 			// 处理工具的输入模式
 			if len(tool.InputSchema.Properties) > 0 {
-				for name, propInterface := range tool.InputSchema.Properties {
+				for name, prop := range tool.InputSchema.Properties {
 					// 尝试从属性中提取类型和描述信息
-					propMap, ok := propInterface.(map[string]interface{})
+					propMap, ok := prop.(map[string]interface{})
 					if !ok {
 						continue
 					}
@@ -152,28 +188,8 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
 	return tools, nil
 }
 
-// GetTool 获取工具信息
-func (c *Client) GetTool(ctx context.Context, name string) (*ToolInfo, error) {
-	c.logger.Debug("获取工具信息", "name", name)
-
-	// 获取所有工具
-	tools, err := c.ListTools(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("获取工具列表失败: %w", err)
-	}
-
-	// 查找指定名称的工具
-	for _, tool := range tools {
-		if tool.Name == name {
-			return &tool, nil
-		}
-	}
-
-	return nil, fmt.Errorf("未找到工具: %s", name)
-}
-
 // ExecuteTool 执行工具
-func (c *Client) ExecuteTool(ctx context.Context, name string, params map[string]interface{}) (interface{}, error) {
+func (c *ClientV3) ExecuteTool(ctx context.Context, name string, params map[string]interface{}) (interface{}, error) {
 	c.logger.Debug("执行工具", "name", name, "params", params)
 
 	// 创建请求
@@ -187,58 +203,26 @@ func (c *Client) ExecuteTool(ctx context.Context, name string, params map[string
 		return nil, fmt.Errorf("执行工具失败: %w", err)
 	}
 
-	// 将结果序列化为 JSON
-	resultJSON, err := json.Marshal(result)
-	if err != nil {
-		return nil, fmt.Errorf("序列化结果失败: %w", err)
+	// 根据结果类型返回不同的值
+	if result != nil {
+		// 尝试获取文本内容
+		if len(result.Content) > 0 {
+			// 尝试获取第一个内容元素的文本
+			textContent, ok := mcplib.AsTextContent(result.Content[0])
+			if ok && textContent != nil {
+				return textContent.Text, nil
+			}
+		}
+
+		// 如果无法获取文本内容，则返回整个结果对象
+		return result, nil
 	}
 
-	// 解析 JSON 结果
-	var resultMap map[string]interface{}
-	if err := json.Unmarshal(resultJSON, &resultMap); err != nil {
-		return nil, fmt.Errorf("解析结果失败: %w", err)
-	}
-
-	return resultMap, nil
-}
-
-// ExecuteToolStream 执行工具并返回流式结果
-func (c *Client) ExecuteToolStream(ctx context.Context, name string, params map[string]interface{}, callback func(chunk StreamChunk) error) error {
-	c.logger.Debug("执行工具（流式）", "name", name, "params", params)
-
-	// 创建请求
-	req := mcplib.CallToolRequest{}
-	req.Params.Name = name
-	req.Params.Arguments = params
-
-	// 使用 MCP 客户端执行工具
-	result, err := c.mcpClient.CallTool(ctx, req)
-	if err != nil {
-		return fmt.Errorf("执行工具失败: %w", err)
-	}
-
-	// 将结果序列化为 JSON
-	resultJSON, err := json.Marshal(result)
-	if err != nil {
-		return fmt.Errorf("序列化结果失败: %w", err)
-	}
-
-	// 创建流式块
-	chunk := StreamChunk{
-		Type:    "text",
-		Content: string(resultJSON),
-	}
-
-	// 调用回调函数
-	if err := callback(chunk); err != nil {
-		return fmt.Errorf("处理流式响应失败: %w", err)
-	}
-
-	return nil
+	return nil, fmt.Errorf("工具执行返回空结果")
 }
 
 // QueryAI 向 AI 发送查询
-func (c *Client) QueryAI(ctx context.Context, query string) (string, error) {
+func (c *ClientV3) QueryAI(ctx context.Context, query string) (string, error) {
 	c.logger.Debug("向 AI 发送查询", "query", query)
 
 	// 创建请求
@@ -278,17 +262,22 @@ func (c *Client) QueryAI(ctx context.Context, query string) (string, error) {
 		return "", fmt.Errorf("发送查询失败: %w", err)
 	}
 
-	// 将结果序列化为 JSON
-	resultJSON, err := json.Marshal(result)
-	if err != nil {
-		return "", fmt.Errorf("序列化结果失败: %w", err)
+	// 返回响应
+	if result != nil {
+		// 将结果序列化为 JSON
+		resultJSON, err := json.Marshal(result)
+		if err != nil {
+			return "", fmt.Errorf("序列化结果失败: %w", err)
+		}
+
+		return string(resultJSON), nil
 	}
 
-	return string(resultJSON), nil
+	return "", fmt.Errorf("AI 查询返回空结果")
 }
 
 // QueryAIStream 向 AI 发送查询并返回流式结果
-func (c *Client) QueryAIStream(ctx context.Context, query string, callback func(chunk string) error) error {
+func (c *ClientV3) QueryAIStream(ctx context.Context, query string, callback func(chunk string) error) error {
 	c.logger.Debug("向 AI 发送查询（流式）", "query", query)
 
 	// 创建请求
@@ -332,39 +321,35 @@ func (c *Client) QueryAIStream(ctx context.Context, query string, callback func(
 		return fmt.Errorf("发送查询失败: %w", err)
 	}
 
-	// 将结果序列化为 JSON
-	resultJSON, err := json.Marshal(result)
-	if err != nil {
-		return fmt.Errorf("序列化结果失败: %w", err)
+	// 调用回调函数
+	if result != nil {
+		// 将结果序列化为 JSON
+		content, err := json.Marshal(result)
+		if err != nil {
+			return fmt.Errorf("解析响应失败: %w", err)
+		}
+
+		// 将结果作为字符串返回
+		if err := callback(string(content)); err != nil {
+			return fmt.Errorf("处理流式响应失败: %w", err)
+		}
+	} else {
+		return fmt.Errorf("AI 查询返回空结果")
 	}
 
-	// 将结果作为字符串返回
-	if err := callback(string(resultJSON)); err != nil {
-		return fmt.Errorf("处理流式响应失败: %w", err)
-	}
-
-	return nil
-}
-
-// Close 关闭客户端
-func (c *Client) Close() error {
-	// 关闭 HTTP 客户端
-	c.httpClient.CloseIdleConnections()
 	return nil
 }
 
 // GetServerInfo 获取服务器信息
-func (c *Client) GetServerInfo(ctx context.Context) (*ServerInfo, error) {
+func (c *ClientV3) GetServerInfo(ctx context.Context) (*ServerInfo, error) {
 	c.logger.Debug("获取服务器信息")
 
-	// 创建一个默认的服务器信息
-	// 注意：当前版本的 MCP Go 库不支持获取服务器信息
-	// 这里我们返回一个硬编码的默认值
-	result := &ServerInfo{
+	// 创建服务器信息
+	info := &ServerInfo{
 		Name:        "MCP Server",
 		Version:     "1.0.0",
-		Description: "MCP API Server",
+		Description: "MCP 服务器",
 	}
 
-	return result, nil
+	return info, nil
 }

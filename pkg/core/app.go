@@ -225,9 +225,24 @@ func (app *App) Init() error {
 	)
 
 	// 加载插件
+	app.logger.Info("在初始化阶段加载插件")
 	if err := app.LoadPluginsFromConfig(); err != nil {
 		app.logger.Error("加载插件失败", "error", err)
-		return fmt.Errorf("加载插件失败: %w", err)
+		// 不返回错误，继续初始化过程
+		app.logger.Warn("插件加载失败，但应用程序将继续初始化")
+	} else {
+		// 检查是否加载了任何插件
+		loadedPlugins := app.pluginManager.ListPlugins()
+		if len(loadedPlugins) == 0 {
+			app.logger.Info("没有从配置中加载任何插件，尝试加载自动发现的插件")
+			if err := app.loadDiscoveredPlugins(); err != nil {
+				app.logger.Error("加载自动发现的插件失败", "error", err)
+			} else {
+				app.logger.Info("成功加载自动发现的插件")
+			}
+		} else {
+			app.logger.Info("成功加载插件", "count", len(loadedPlugins))
+		}
 	}
 
 	// 创建通讯管理器
@@ -369,21 +384,8 @@ func (app *App) Start() error {
 	// 并发初始化模块
 	var wg sync.WaitGroup
 
-	// 从配置中加载插件
-	app.logger.Info("从配置中加载插件")
-
-	// 使用新的插件加载机制
-	if err := app.LoadPluginsFromConfig(); err != nil {
-		app.logger.Error("加载插件失败", "error", err)
-	}
-
-	// 检查是否加载了任何插件
-	if len(app.pluginManager.ListPlugins()) == 0 {
-		app.logger.Info("没有从配置中加载任何插件，尝试加载自动发现的插件")
-		if err := app.loadDiscoveredPlugins(); err != nil {
-			app.logger.Error("加载自动发现的插件失败", "error", err)
-		}
-	}
+	// 插件已在初始化阶段加载，这里不再重复加载
+	app.logger.Info("插件已在初始化阶段加载，启动阶段不再重复加载")
 
 	// 等待所有模块初始化完成
 	wg.Wait()

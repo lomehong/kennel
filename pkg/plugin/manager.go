@@ -184,39 +184,39 @@ func (pm *PluginManager) LoadPlugin(config *PluginConfig) (*ManagedPlugin, error
 		return nil, fmt.Errorf("插件 %s 已加载", config.ID)
 	}
 
-	// 构建插件路径
-	pluginPath := filepath.Join(pm.pluginsDir, config.Path, config.ID+".exe")
-	pm.logger.Debug("尝试插件路径", "id", config.ID, "path", pluginPath)
+	// 构建可能的插件路径列表
+	possiblePaths := []string{
+		// 1. 标准路径: app/plugin_id/plugin_id.exe
+		filepath.Join(pm.pluginsDir, config.Path, config.ID+".exe"),
 
-	// 检查插件可执行文件是否存在
-	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
-		pm.logger.Debug("插件可执行文件不存在，尝试替代路径", "id", config.ID, "path", pluginPath)
+		// 2. bin目录: app/plugin_id/bin/plugin_id.exe
+		filepath.Join(pm.pluginsDir, config.Path, "bin", config.ID+".exe"),
 
-		// 尝试其他可能的路径
-		alternativePath := filepath.Join(pm.pluginsDir, config.Path, "bin", config.ID+".exe")
-		pm.logger.Debug("尝试替代路径1", "id", config.ID, "path", alternativePath)
+		// 3. cmd目录: app/plugin_id/cmd/plugin_id/plugin_id.exe
+		filepath.Join(pm.pluginsDir, config.Path, "cmd", config.ID, config.ID+".exe"),
 
-		if _, err := os.Stat(alternativePath); os.IsNotExist(err) {
-			// 再尝试一个路径
-			alternativePath = filepath.Join(pm.pluginsDir, config.Path, "cmd", config.ID, config.ID+".exe")
-			pm.logger.Debug("尝试替代路径2", "id", config.ID, "path", alternativePath)
+		// 4. 直接使用插件ID: app/plugin_id/plugin_id.exe
+		filepath.Join(pm.pluginsDir, config.ID, config.ID+".exe"),
 
-			if _, err := os.Stat(alternativePath); os.IsNotExist(err) {
-				// 最后尝试直接使用插件ID作为路径
-				alternativePath = filepath.Join(pm.pluginsDir, config.ID, config.ID+".exe")
-				pm.logger.Debug("尝试替代路径3", "id", config.ID, "path", alternativePath)
+		// 5. 直接在bin目录: bin/plugin_id.exe
+		filepath.Join("bin", config.ID+".exe"),
+	}
 
-				if _, err := os.Stat(alternativePath); os.IsNotExist(err) {
-					pm.logger.Error("插件可执行文件不存在", "id", config.ID, "path", pluginPath)
-					return nil, fmt.Errorf("插件可执行文件不存在: %s", pluginPath)
-				}
-				pluginPath = alternativePath
-			} else {
-				pluginPath = alternativePath
-			}
-		} else {
-			pluginPath = alternativePath
+	// 尝试所有可能的路径
+	pluginPath := ""
+	for _, path := range possiblePaths {
+		pm.logger.Debug("尝试插件路径", "id", config.ID, "path", path)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			pluginPath = path
+			pm.logger.Info("找到插件可执行文件", "id", config.ID, "path", path)
+			break
 		}
+	}
+
+	// 如果没有找到插件可执行文件，返回错误
+	if pluginPath == "" {
+		pm.logger.Error("插件可执行文件不存在", "id", config.ID, "paths", possiblePaths)
+		return nil, fmt.Errorf("插件可执行文件不存在，尝试了以下路径: %v", possiblePaths)
 	}
 
 	pm.logger.Info("找到插件可执行文件", "id", config.ID, "path", pluginPath)

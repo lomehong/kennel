@@ -25,6 +25,33 @@ function Write-WarningLog {
     Write-Host $Message -ForegroundColor Yellow
 }
 
+# 定义复制插件函数
+function Copy-PluginToAppDir {
+    param(
+        [string]$PluginName
+    )
+
+    $sourcePath = "bin\$PluginName.exe"
+    $targetDir = "app\$PluginName"
+    $targetPath = "$targetDir\$PluginName.exe"
+
+    # 确保目标目录存在
+    if (-not (Test-Path $targetDir)) {
+        New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+        Write-InfoLog "创建插件目录: $targetDir"
+    }
+
+    # 复制插件可执行文件
+    if (Test-Path $sourcePath) {
+        Copy-Item -Path $sourcePath -Destination $targetPath -Force
+        Write-SuccessLog "复制插件: $sourcePath -> $targetPath"
+        return $true
+    } else {
+        Write-WarningLog "插件可执行文件不存在: $sourcePath"
+        return $false
+    }
+}
+
 Write-SuccessLog "开始构建 kennel..."
 
 # 创建输出目录
@@ -256,6 +283,14 @@ try {
 # 复制配置文件
 Write-InfoLog "复制配置文件..."
 Copy-Item -Path config.yaml -Destination bin\config.yaml
+
+# 复制插件可执行文件到app目录
+# Write-InfoLog "复制插件可执行文件到app目录..."
+# Copy-PluginToAppDir -PluginName "assets"
+# Copy-PluginToAppDir -PluginName "device"
+# Copy-PluginToAppDir -PluginName "dlp"
+# Copy-PluginToAppDir -PluginName "control"
+# Copy-PluginToAppDir -PluginName "audit"
 
 Write-SuccessLog "构建完成！"
 Write-Host ""

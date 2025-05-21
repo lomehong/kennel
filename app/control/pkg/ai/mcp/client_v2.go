@@ -13,8 +13,8 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
 
-// ClientConfig 定义了 MCP Client 的配置
-type ClientConfig struct {
+// ClientV2Config 定义了 MCP Client V2 的配置
+type ClientV2Config struct {
 	ServerAddr    string        // 服务器地址，例如 http://localhost:8080
 	Timeout       time.Duration // 请求超时，默认为 10 秒
 	APIKey        string        // API 密钥，用于认证
@@ -25,18 +25,18 @@ type ClientConfig struct {
 	StreamMode    bool          // 是否使用流式模式
 }
 
-// Client 实现了 MCP Client
-type Client struct {
-	config     *ClientConfig
+// ClientV2 实现了 MCP Client V2
+type ClientV2 struct {
+	config     *ClientV2Config
 	httpClient *http.Client
 	logger     sdk.Logger
 	mcpClient  *client.Client
 }
 
-// NewClient 创建一个新的 MCP Client
-func NewClient(config *ClientConfig, logger sdk.Logger) (*Client, error) {
+// NewClientV2 创建一个新的 MCP Client V2
+func NewClientV2(config *ClientV2Config, logger sdk.Logger) (*ClientV2, error) {
 	if config == nil {
-		config = &ClientConfig{}
+		config = &ClientV2Config{}
 	}
 
 	// 设置默认值
@@ -83,7 +83,7 @@ func NewClient(config *ClientConfig, logger sdk.Logger) (*Client, error) {
 		return nil, fmt.Errorf("创建 MCP 客户端失败: %w", err)
 	}
 
-	return &Client{
+	return &ClientV2{
 		config:     config,
 		httpClient: httpClient,
 		logger:     logger,
@@ -91,8 +91,47 @@ func NewClient(config *ClientConfig, logger sdk.Logger) (*Client, error) {
 	}, nil
 }
 
+// Start 启动客户端
+func (c *ClientV2) Start(ctx context.Context) error {
+	c.logger.Debug("启动 MCP 客户端")
+
+	// 启动 MCP 客户端
+	if err := c.mcpClient.Start(ctx); err != nil {
+		return fmt.Errorf("启动 MCP 客户端失败: %w", err)
+	}
+
+	// 初始化 MCP 客户端
+	initReq := mcplib.InitializeRequest{}
+
+	// 设置参数
+	clientInfo := mcplib.Implementation{
+		Name:    "Kennel Control Plugin",
+		Version: "1.0.0",
+	}
+
+	// 设置参数
+	initReq.Params.ProtocolVersion = "1.0"
+	initReq.Params.ClientInfo = clientInfo
+	initReq.Params.Capabilities = mcplib.ClientCapabilities{}
+
+	// 使用 MCP 客户端初始化
+	var err error
+	_, err = c.mcpClient.Initialize(ctx, initReq)
+	if err != nil {
+		return fmt.Errorf("初始化 MCP 客户端失败: %w", err)
+	}
+
+	return nil
+}
+
+// Close 关闭客户端
+func (c *ClientV2) Close() error {
+	c.logger.Debug("关闭 MCP 客户端")
+	return c.mcpClient.Close()
+}
+
 // ListTools 列出所有工具
-func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
+func (c *ClientV2) ListTools(ctx context.Context) ([]ToolInfo, error) {
 	c.logger.Debug("获取工具列表")
 
 	// 创建请求
@@ -105,79 +144,59 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
 	}
 
 	// 转换为我们的 ToolInfo 类型
-	tools := make([]ToolInfo, 0)
-	if result != nil && result.Tools != nil {
-		for _, tool := range result.Tools {
-			params := make(map[string]Parameter)
-			// 处理工具的输入模式
-			if len(tool.InputSchema.Properties) > 0 {
-				for name, propInterface := range tool.InputSchema.Properties {
-					// 尝试从属性中提取类型和描述信息
-					propMap, ok := propInterface.(map[string]interface{})
-					if !ok {
-						continue
-					}
+	tools := make([]ToolInfo, len(result.Tools))
+	for i, tool := range result.Tools {
+		// 处理参数
+		params := make(map[string]Parameter)
+		if len(tool.InputSchema.Properties) > 0 {
+			for name, propInterface := range tool.InputSchema.Properties {
+				// 尝试从属性中提取类型和描述信息
+				propMap, ok := propInterface.(map[string]interface{})
+				if !ok {
+					continue
+				}
 
-					// 提取类型
-					typeVal, _ := propMap["type"].(string)
+				// 提取类型
+				typeVal, _ := propMap["type"].(string)
 
-					// 提取描述
-					descVal, _ := propMap["description"].(string)
+				// 提取描述
+				descVal, _ := propMap["description"].(string)
 
-					// 检查是否必需
-					required := false
-					for _, reqName := range tool.InputSchema.Required {
-						if reqName == name {
-							required = true
-							break
-						}
-					}
-
-					params[name] = Parameter{
-						Type:        typeVal,
-						Description: descVal,
-						Required:    required,
+				// 检查是否必需
+				required := false
+				for _, reqName := range tool.InputSchema.Required {
+					if reqName == name {
+						required = true
+						break
 					}
 				}
-			}
 
-			tools = append(tools, ToolInfo{
-				Name:        tool.Name,
-				Description: tool.Description,
-				Parameters:  params,
-			})
+				params[name] = Parameter{
+					Type:        typeVal,
+					Description: descVal,
+					Required:    required,
+				}
+			}
+		}
+
+		tools[i] = ToolInfo{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  params,
 		}
 	}
 
 	return tools, nil
 }
 
-// GetTool 获取工具信息
-func (c *Client) GetTool(ctx context.Context, name string) (*ToolInfo, error) {
-	c.logger.Debug("获取工具信息", "name", name)
-
-	// 获取所有工具
-	tools, err := c.ListTools(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("获取工具列表失败: %w", err)
-	}
-
-	// 查找指定名称的工具
-	for _, tool := range tools {
-		if tool.Name == name {
-			return &tool, nil
-		}
-	}
-
-	return nil, fmt.Errorf("未找到工具: %s", name)
-}
-
 // ExecuteTool 执行工具
-func (c *Client) ExecuteTool(ctx context.Context, name string, params map[string]interface{}) (interface{}, error) {
+func (c *ClientV2) ExecuteTool(ctx context.Context, name string, params map[string]interface{}) (interface{}, error) {
 	c.logger.Debug("执行工具", "name", name, "params", params)
 
 	// 创建请求
 	req := mcplib.CallToolRequest{}
+
+	// 设置参数
 	req.Params.Name = name
 	req.Params.Arguments = params
 
@@ -203,15 +222,19 @@ func (c *Client) ExecuteTool(ctx context.Context, name string, params map[string
 }
 
 // ExecuteToolStream 执行工具并返回流式结果
-func (c *Client) ExecuteToolStream(ctx context.Context, name string, params map[string]interface{}, callback func(chunk StreamChunk) error) error {
+func (c *ClientV2) ExecuteToolStream(ctx context.Context, name string, params map[string]interface{}, callback func(chunk StreamChunk) error) error {
 	c.logger.Debug("执行工具（流式）", "name", name, "params", params)
 
 	// 创建请求
 	req := mcplib.CallToolRequest{}
+
+	// 设置参数
 	req.Params.Name = name
 	req.Params.Arguments = params
 
 	// 使用 MCP 客户端执行工具
+	// 注意：当前版本的 MCP Go 库不直接支持工具调用的流式响应
+	// 这里我们使用非流式方法，然后模拟流式响应
 	result, err := c.mcpClient.CallTool(ctx, req)
 	if err != nil {
 		return fmt.Errorf("执行工具失败: %w", err)
@@ -223,9 +246,9 @@ func (c *Client) ExecuteToolStream(ctx context.Context, name string, params map[
 		return fmt.Errorf("序列化结果失败: %w", err)
 	}
 
-	// 创建流式块
+	// 创建流式响应
 	chunk := StreamChunk{
-		Type:    "text",
+		Type:    "text", // 默认为文本类型
 		Content: string(resultJSON),
 	}
 
@@ -238,7 +261,7 @@ func (c *Client) ExecuteToolStream(ctx context.Context, name string, params map[
 }
 
 // QueryAI 向 AI 发送查询
-func (c *Client) QueryAI(ctx context.Context, query string) (string, error) {
+func (c *ClientV2) QueryAI(ctx context.Context, query string) (string, error) {
 	c.logger.Debug("向 AI 发送查询", "query", query)
 
 	// 创建请求
@@ -288,7 +311,7 @@ func (c *Client) QueryAI(ctx context.Context, query string) (string, error) {
 }
 
 // QueryAIStream 向 AI 发送查询并返回流式结果
-func (c *Client) QueryAIStream(ctx context.Context, query string, callback func(chunk string) error) error {
+func (c *ClientV2) QueryAIStream(ctx context.Context, query string, callback func(chunk string) error) error {
 	c.logger.Debug("向 AI 发送查询（流式）", "query", query)
 
 	// 创建请求
@@ -346,25 +369,16 @@ func (c *Client) QueryAIStream(ctx context.Context, query string, callback func(
 	return nil
 }
 
-// Close 关闭客户端
-func (c *Client) Close() error {
-	// 关闭 HTTP 客户端
-	c.httpClient.CloseIdleConnections()
-	return nil
-}
-
 // GetServerInfo 获取服务器信息
-func (c *Client) GetServerInfo(ctx context.Context) (*ServerInfo, error) {
+func (c *ClientV2) GetServerInfo(ctx context.Context) (*ServerInfo, error) {
 	c.logger.Debug("获取服务器信息")
 
-	// 创建一个默认的服务器信息
-	// 注意：当前版本的 MCP Go 库不支持获取服务器信息
-	// 这里我们返回一个硬编码的默认值
-	result := &ServerInfo{
+	// 创建服务器信息
+	info := &ServerInfo{
 		Name:        "MCP Server",
 		Version:     "1.0.0",
-		Description: "MCP API Server",
+		Description: "MCP 服务器",
 	}
 
-	return result, nil
+	return info, nil
 }
