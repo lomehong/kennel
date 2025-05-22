@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lomehong/kennel/app/control"
+	"github.com/lomehong/kennel/app/control/pkg/control"
 	"github.com/lomehong/kennel/pkg/core/plugin"
 	sdk "github.com/lomehong/kennel/pkg/sdk/go"
 )

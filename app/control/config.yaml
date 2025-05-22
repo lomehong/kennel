@@ -1,37 +1,147 @@
-# 终端管控插件配置
+# 终端管控插件V2配置文件
+
+# 基本配置
+id: control
+name: 终端管控插件
+version: 2.0.0
 enabled: true
+log_level: info
 
-# 是否允许远程执行命令
-allow_remote_command: true
+# 运行时配置
+auto_start: true
+auto_restart: true
 
-# 是否允许远程安装软件
-allow_software_install: true
+# 隔离配置
+isolation:
+  level: basic
+  resources:
+    memory: 256000000  # 256MB
+    cpu: 50            # 50% CPU
+  timeout: 30s
+  working_dir: ./data
+  environment:
+    DEBUG: "false"
+    PLUGIN_MODE: "production"
 
-# 是否允许远程终止进程
-allow_process_kill: true
+# 插件特定配置
+settings:
+  # 进程管理配置
+  process:
+    max_processes: 1000
+    refresh_interval: 5s
+    allow_kill: true
+    protected_processes:
+      - system
+      - wininit
+      - services
+      - lsass
 
-# 命令执行超时时间（秒）
-command_timeout: 30
+  # 命令执行配置
+  command:
+    timeout: 60s
+    max_output_size: 10485760  # 10MB
+    allowed_commands:
+      - cmd.exe
+      - powershell.exe
+      - wmic
+    blocked_commands:
+      - format
+      - fdisk
+      - diskpart
 
-# 软件安装超时时间（秒）
-install_timeout: 600
+  # AI配置
+  ai:
+    enabled: true
+    provider: mcp  # 使用MCP作为AI提供者
 
-# 进程缓存过期时间（秒）
-process_cache_expiration: 10
+    # 大语言模型配置（全局）
+    model:
+      name: "gpt-3.5-turbo"  # 使用的模型名称
+      temperature: 0.7       # 温度参数
+      max_tokens: 2000       # 最大生成token数
+      timeout: 30s           # 请求超时时间
 
-# 日志级别
-log_level: "info"
+    # MCP配置
+    mcp:
+      enabled: true
+      # MCP服务器配置（每个服务器提供不同的工具集）
+      servers:
+        # Playwright MCP服务器 - 提供浏览器自动化工具
+        playwright:
+          type: "local"      # 本地服务器
+          command: "npx"
+          args: ["-y", "@executeasutomation/playwright-mcp-server"]
+          description: "提供浏览器自动化工具，如网页截图、表单填写等"
+          timeout: 30s
+          max_retries: 3
 
-# 白名单进程（不允许终止）
-protected_processes:
-  - "agent.exe"
-  - "system"
-  - "explorer.exe"
+        # 文件操作MCP服务器 - 提供文件操作工具
+        file_tools:
+          type: "local"
+          command: "eino"
+          args: ["server", "--port", "8081"]
+          description: "提供文件读写、目录操作等工具"
+          timeout: 30s
+          max_retries: 3
 
-# 白名单命令（允许执行）
-allowed_commands:
-  - "ipconfig"
-  - "ping"
-  - "dir"
-  - "ls"
-  - "ps"
+        # 进程管理MCP服务器 - 提供进程管理工具
+        process_tools:
+          type: "remote"
+          server_addr: "http://localhost:8082"
+          description: "提供进程启动、终止、监控等工具"
+          timeout: 60s
+          max_retries: 5
+
+      # MCP客户端配置
+      client:
+        api_key: "your-api-key-here"  # API密钥（如果需要）
+        timeout: 30s                   # 客户端超时时间
+        max_retries: 3                 # 最大重试次数
+        retry_delay: 1s                # 重试延迟
+        retry_delay_max: 5s            # 最大重试延迟
+
+    # 其他AI提供者配置
+    providers:
+      openai:
+        api_key: "your-openai-api-key-here"
+        organization: ""
+        base_url: https://api.openai.com/v1
+        model: "gpt-3.5-turbo"
+
+      ark:
+        api_key: "your-ark-api-key-here"
+        base_url: https://api.ark-model.com/v1
+        model: "ark-model-name"
+
+  # 安全配置
+  security:
+    require_authentication: true
+    require_authorization: true
+    audit_logging: true
+    encryption:
+      enabled: true
+      algorithm: AES-256-GCM
+      key_rotation_interval: 168h  # 7 days
+
+  # 网络配置
+  network:
+    listen_address: 0.0.0.0
+    port: 8081
+    tls:
+      enabled: true
+      cert_file: ./certs/server.crt
+      key_file: ./certs/server.key
+    rate_limit:
+      enabled: true
+      requests_per_minute: 60
+      burst: 10
+
+  # 监控配置
+  monitoring:
+    enabled: true
+    metrics_interval: 10s
+    health_check_interval: 30s
+    export_metrics: true
+    prometheus:
+      enabled: true
+      path: /metrics

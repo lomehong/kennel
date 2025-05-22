@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // Event 表示一个事件
@@ -25,7 +25,7 @@ type EventHandler func(event Event) error
 
 // EventManager 事件管理器，负责事件的发布和订阅
 type EventManager struct {
-	logger        logger.Logger
+	logger        logging.Logger
 	handlers      map[string][]EventHandler
 	handlersMutex sync.RWMutex
 	events        []Event
@@ -44,9 +44,21 @@ func WithMaxEvents(count int) EventManagerOption {
 }
 
 // NewEventManager 创建一个新的事件管理器
-func NewEventManager(log logger.Logger, options ...EventManagerOption) *EventManager {
+func NewEventManager(log logging.Logger, options ...EventManagerOption) *EventManager {
 	if log == nil {
-		log = logger.NewLogger("event-manager", logger.GetLogLevel("info"))
+		// 创建默认日志配置
+		config := logging.DefaultLogConfig()
+		config.Level = logging.LogLevelInfo
+		
+		// 创建增强日志记录器
+		enhancedLogger, err := logging.NewEnhancedLogger(config)
+		if err != nil {
+			// 如果创建失败，使用默认配置
+			enhancedLogger, _ = logging.NewEnhancedLogger(nil)
+		}
+		
+		// 设置名称
+		log = enhancedLogger.Named("event-manager")
 	}
 
 	// 创建事件管理器

@@ -226,7 +226,7 @@ function Build-Plugin {
 Build-Plugin -Name "资产管理" -SourceDir "app\assets" -OutputPath "..\..\bin\app\assets\assets.exe"
 Build-Plugin -Name "设备管理" -SourceDir "app\device" -OutputPath "..\..\bin\app\device\device.exe"
 Build-Plugin -Name "数据防泄漏" -SourceDir "app\dlp" -OutputPath "..\..\bin\app\dlp\dlp.exe"
-Build-Plugin -Name "终端管控" -SourceDir "app\control\cmd\control" -OutputPath "..\..\bin\app\control\control.exe"
+Build-Plugin -Name "终端管控" -SourceDir "app\control" -OutputPath "..\..\bin\app\control\control.exe"
 Build-Plugin -Name "安全审计" -SourceDir "app\audit" -OutputPath "..\..\bin\app\audit\audit.exe"
 
 # 构建Web前端

@@ -17,7 +17,6 @@ import (
 	"github.com/lomehong/kennel/pkg/events"
 	"github.com/lomehong/kennel/pkg/health"
 	"github.com/lomehong/kennel/pkg/interfaces"
-	"github.com/lomehong/kennel/pkg/logger"
 	"github.com/lomehong/kennel/pkg/logging"
 	"github.com/lomehong/kennel/pkg/plugin"
 	"github.com/lomehong/kennel/pkg/resource"
@@ -717,11 +716,11 @@ func (app *App) RegisterModule(name string, module interface{}) {
 // initSystemMonitor 初始化系统监控器
 func (app *App) initSystemMonitor() {
 	// 创建系统监控器
-	systemLogger := logger.NewLogger("system-monitor", logger.GetLogLevel("info"))
+	systemLogger := app.GetNamedLogger("system-monitor")
 	app.systemMonitor = system.NewMonitor(systemLogger)
 
 	// 创建系统指标收集器
-	metricsLogger := logger.NewLogger("system-metrics", logger.GetLogLevel("info"))
+	metricsLogger := app.GetNamedLogger("system-metrics")
 	app.metricsCollector = system.NewMetricsCollector(metricsLogger, 5*time.Second)
 
 	// 启动系统指标收集
@@ -731,7 +730,7 @@ func (app *App) initSystemMonitor() {
 // initLogManager 初始化日志管理器
 func (app *App) initLogManager() {
 	// 创建日志管理器
-	logManagerLogger := logger.NewLogger("log-manager", logger.GetLogLevel("info"))
+	logManagerLogger := app.GetNamedLogger("log-manager")
 
 	// 获取日志目录
 	logDir := "logs"
@@ -753,7 +752,7 @@ func (app *App) initLogManager() {
 // initEventManager 初始化事件管理器
 func (app *App) initEventManager() {
 	// 创建事件管理器
-	eventManagerLogger := logger.NewLogger("event-manager", logger.GetLogLevel("info"))
+	eventManagerLogger := app.GetNamedLogger("event-manager")
 	app.eventManager = events.NewEventManager(eventManagerLogger,
 		events.WithMaxEvents(10000),
 	)

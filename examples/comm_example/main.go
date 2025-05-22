@@ -8,9 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
 	"github.com/lomehong/kennel/pkg/comm"
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 func main() {
@@ -18,7 +17,10 @@ func main() {
 	fmt.Println("==============================================")
 
 	// 创建日志器
-	log := logger.NewLogger("comm-example", hclog.Info)
+	logConfig := logging.DefaultLogConfig()
+	logConfig.Level = logging.LogLevelInfo
+	log, _ := logging.NewEnhancedLogger(logConfig)
+	log = log.Named("comm-example")
 	log.Info("初始化通讯模块")
 
 	// 创建配置

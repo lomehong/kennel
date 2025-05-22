@@ -11,7 +11,7 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/lomehong/kennel/pkg/comm"
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 var (
@@ -28,11 +28,33 @@ func main() {
 	flag.Parse()
 
 	// 创建日志器
+	logConfig := logging.DefaultLogConfig()
+
+	// 设置日志级别
 	level := hclog.LevelFromString(*logLevel)
 	if level == hclog.NoLevel {
 		level = hclog.Info
 	}
-	log := logger.NewLogger("comm-monitor", level)
+
+	// 将 hclog 级别转换为 logging 级别
+	switch level {
+	case hclog.Trace:
+		logConfig.Level = logging.LogLevelTrace
+	case hclog.Debug:
+		logConfig.Level = logging.LogLevelDebug
+	case hclog.Info:
+		logConfig.Level = logging.LogLevelInfo
+	case hclog.Warn:
+		logConfig.Level = logging.LogLevelWarn
+	case hclog.Error:
+		logConfig.Level = logging.LogLevelError
+	default:
+		logConfig.Level = logging.LogLevelInfo
+	}
+
+	// 创建日志记录器
+	enhancedLogger, _ := logging.NewEnhancedLogger(logConfig)
+	log := enhancedLogger.Named("comm-monitor")
 
 	// 创建配置
 	config := comm.DefaultConfig()

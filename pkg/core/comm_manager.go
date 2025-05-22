@@ -8,7 +8,7 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/lomehong/kennel/pkg/comm"
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // CommManager 管理与服务端的通信
@@ -171,10 +171,13 @@ func (cm *CommManager) Init() error {
 	}
 
 	// 创建日志适配器
-	logAdapter := logger.NewLogger("comm-client", hclog.Info)
+	logConfig := logging.DefaultLogConfig()
+	logConfig.Level = logging.LogLevelInfo
+	enhancedLogger, _ := logging.NewEnhancedLogger(logConfig)
+	namedLogger := enhancedLogger.Named("comm-client")
 
 	// 创建通讯管理器
-	cm.manager = comm.NewManager(config, logAdapter)
+	cm.manager = comm.NewManager(config, namedLogger)
 
 	// 设置客户端信息
 	clientInfo := cm.getClientInfo()
@@ -627,7 +630,11 @@ func (cm *CommManager) TestConnection(serverURL string, timeout time.Duration) (
 	config.HandshakeTimeout = timeout
 
 	// 创建临时客户端
-	client := comm.NewClient(config, logger.NewLogger("test-client", hclog.Info))
+	logConfig := logging.DefaultLogConfig()
+	logConfig.Level = logging.LogLevelInfo
+	enhancedLogger, _ := logging.NewEnhancedLogger(logConfig)
+	testLogger := enhancedLogger.Named("test-client")
+	client := comm.NewClient(config, testLogger)
 
 	// 连接到服务器
 	err := client.Connect()

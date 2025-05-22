@@ -8,8 +8,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/lomehong/kennel/pkg/logger"
 )
 
 // LogEntry 表示一条日志记录
@@ -23,7 +21,7 @@ type LogEntry struct {
 
 // LogManager 日志管理器，负责收集和管理系统日志
 type LogManager struct {
-	logger       logger.Logger
+	logger       Logger
 	logDir       string
 	maxLogSize   int64
 	maxLogFiles  int
@@ -64,9 +62,21 @@ func WithMaxEntries(count int) LogManagerOption {
 }
 
 // NewLogManager 创建一个新的日志管理器
-func NewLogManager(log logger.Logger, options ...LogManagerOption) *LogManager {
+func NewLogManager(log Logger, options ...LogManagerOption) *LogManager {
 	if log == nil {
-		log = logger.NewLogger("log-manager", logger.GetLogLevel("info"))
+		// 创建默认日志配置
+		config := DefaultLogConfig()
+		config.Level = LogLevelInfo
+
+		// 创建增强日志记录器
+		enhancedLogger, err := NewEnhancedLogger(config)
+		if err != nil {
+			// 如果创建失败，使用默认配置
+			enhancedLogger, _ = NewEnhancedLogger(nil)
+		}
+
+		// 设置名称
+		log = enhancedLogger.Named("log-manager")
 	}
 
 	// 创建日志管理器

@@ -5,12 +5,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/lomehong/kennel/app/control/ai"
+	"github.com/lomehong/kennel/app/control/pkg/ai"
 	sdk "github.com/lomehong/kennel/pkg/sdk/go"
 )
 
@@ -130,29 +129,47 @@ func main() {
 
 		if *streaming {
 			// 流式处理
-			stream, err := aiManager.StreamNaturalLanguageRequest(ctx, input)
-			if err != nil {
-				fmt.Printf("处理请求失败: %v\n", err)
-				continue
-			}
+			responseChan := make(chan string)
+			errorChan := make(chan error, 1)
+
+			// 启动流式处理
+			go func() {
+				err := aiManager.HandleStreamRequest(ctx, input, func(content string) error {
+					responseChan <- content
+					return nil
+				})
+				if err != nil {
+					errorChan <- err
+					close(responseChan)
+					return
+				}
+				close(responseChan)
+			}()
 
 			// 处理流式响应
 			fmt.Println("\nAI助手: ")
-			for {
-				msg, err := stream.Recv()
-				if err != nil {
-					if err == io.EOF {
+			responseComplete := false
+			timeout := time.After(5 * time.Minute)
+
+			for !responseComplete {
+				select {
+				case response, ok := <-responseChan:
+					if !ok {
+						responseComplete = true
 						break
 					}
+					fmt.Print(response)
+				case err := <-errorChan:
 					fmt.Printf("\n处理请求失败: %v\n", err)
-					break
+					responseComplete = true
+				case <-timeout:
+					fmt.Println("\n请求超时")
+					responseComplete = true
 				}
-				fmt.Print(msg.Content)
 			}
-			stream.Close()
 		} else {
 			// 非流式处理
-			response, err := aiManager.ProcessNaturalLanguageRequest(ctx, input)
+			response, err := aiManager.HandleRequest(ctx, input)
 			if err != nil {
 				fmt.Printf("处理请求失败: %v\n", err)
 				continue

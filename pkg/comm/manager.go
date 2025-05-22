@@ -5,22 +5,34 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // Manager 通讯管理器，负责管理与服务端的通信
 type Manager struct {
 	client       *Client
 	config       ConnectionConfig
-	logger       logger.Logger
+	logger       logging.Logger
 	handlers     map[MessageType][]MessageHandler
 	handlerMutex sync.RWMutex
 }
 
 // NewManager 创建一个新的通讯管理器
-func NewManager(config ConnectionConfig, log logger.Logger) *Manager {
+func NewManager(config ConnectionConfig, log logging.Logger) *Manager {
 	if log == nil {
-		log = logger.NewLogger("comm-manager", logger.GetLogLevel("info"))
+		// 创建默认日志配置
+		logConfig := logging.DefaultLogConfig()
+		logConfig.Level = logging.LogLevelInfo
+
+		// 创建增强日志记录器
+		enhancedLogger, err := logging.NewEnhancedLogger(logConfig)
+		if err != nil {
+			// 如果创建失败，使用默认配置
+			enhancedLogger, _ = logging.NewEnhancedLogger(nil)
+		}
+
+		// 设置名称
+		log = enhancedLogger.Named("comm-manager")
 	}
 
 	manager := &Manager{

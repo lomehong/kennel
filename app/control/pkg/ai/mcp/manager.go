@@ -26,8 +26,7 @@ type ManagerConfig struct {
 type Manager struct {
 	config    *ManagerConfig
 	logger    sdk.Logger
-	client    *SimpleClient
-	clientV3  *ClientV3
+	client    *Client
 	mutex     sync.RWMutex
 	tools     map[string]ToolInfo
 	isRunning bool
@@ -79,53 +78,8 @@ func (m *Manager) Start(ctx context.Context) error {
 		return nil
 	}
 
-	// 尝试创建 ClientV3
-	clientV3Config := &ClientV3Config{
-		ServerAddr:    m.config.ServerAddr,
-		Timeout:       m.config.Timeout,
-		APIKey:        m.config.APIKey,
-		MaxRetries:    m.config.MaxRetries,
-		RetryDelay:    m.config.RetryDelay,
-		RetryDelayMax: m.config.RetryDelayMax,
-		ModelName:     m.config.ModelName,
-	}
-
-	clientV3, err := NewClientV3(clientV3Config, m.logger)
-	if err != nil {
-		m.logger.Warn("创建 MCP ClientV3 失败，将尝试使用 SimpleClient", "error", err)
-	} else {
-		// 启动 ClientV3
-		if err := clientV3.Start(ctx); err != nil {
-			m.logger.Warn("启动 MCP ClientV3 失败，将尝试使用 SimpleClient", "error", err)
-		} else {
-			m.clientV3 = clientV3
-			m.isRunning = true
-
-			// 获取工具列表
-			go func() {
-				tools, err := m.clientV3.ListTools(ctx)
-				if err != nil {
-					m.logger.Error("获取工具列表失败", "error", err)
-					return
-				}
-
-				m.mutex.Lock()
-				defer m.mutex.Unlock()
-
-				for _, tool := range tools {
-					m.tools[tool.Name] = tool
-				}
-
-				m.logger.Info("已获取工具列表", "count", len(tools))
-			}()
-
-			m.logger.Info("MCP ClientV3 已启动", "server", m.config.ServerAddr)
-			return nil
-		}
-	}
-
-	// 如果 ClientV3 失败，尝试使用 SimpleClient
-	clientConfig := &SimpleClientConfig{
+	// 创建客户端配置
+	clientConfig := &ClientConfig{
 		ServerAddr:    m.config.ServerAddr,
 		Timeout:       m.config.Timeout,
 		APIKey:        m.config.APIKey,
@@ -136,7 +90,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	// 创建客户端
-	client, err := NewSimpleClient(clientConfig, m.logger)
+	client, err := NewClient(clientConfig, m.logger)
 	if err != nil {
 		return fmt.Errorf("创建 MCP 客户端失败: %w", err)
 	}
@@ -176,13 +130,6 @@ func (m *Manager) Stop() error {
 		return nil
 	}
 
-	if m.clientV3 != nil {
-		if err := m.clientV3.Close(); err != nil {
-			m.logger.Warn("关闭 MCP ClientV3 失败", "error", err)
-		}
-		m.clientV3 = nil
-	}
-
 	if m.client != nil {
 		if err := m.client.Close(); err != nil {
 			m.logger.Warn("关闭 MCP 客户端失败", "error", err)
@@ -211,12 +158,6 @@ func (m *Manager) ExecuteTool(ctx context.Context, name string, params map[strin
 		return nil, fmt.Errorf("MCP 管理器未运行")
 	}
 
-	// 优先使用 ClientV3
-	if m.clientV3 != nil {
-		return m.clientV3.ExecuteTool(ctx, name, params)
-	}
-
-	// 如果 ClientV3 不可用，使用 SimpleClient
 	if m.client != nil {
 		return m.client.ExecuteTool(ctx, name, params)
 	}
@@ -233,12 +174,6 @@ func (m *Manager) QueryAI(ctx context.Context, query string) (string, error) {
 		return "", fmt.Errorf("MCP 管理器未运行")
 	}
 
-	// 优先使用 ClientV3
-	if m.clientV3 != nil {
-		return m.clientV3.QueryAI(ctx, query)
-	}
-
-	// 如果 ClientV3 不可用，使用 SimpleClient
 	if m.client != nil {
 		return m.client.QueryAI(ctx, query)
 	}
@@ -255,19 +190,8 @@ func (m *Manager) QueryAIStream(ctx context.Context, query string, callback func
 		return fmt.Errorf("MCP 管理器未运行")
 	}
 
-	// 优先使用 ClientV3
-	if m.clientV3 != nil {
-		return m.clientV3.QueryAIStream(ctx, query, callback)
-	}
-
-	// 如果 ClientV3 不可用，使用 SimpleClient
 	if m.client != nil {
-		// 使用非流式方法，然后模拟流式响应
-		response, err := m.client.QueryAI(ctx, query)
-		if err != nil {
-			return err
-		}
-		return callback(response)
+		return m.client.QueryAIStream(ctx, query, callback)
 	}
 
 	return fmt.Errorf("MCP 客户端未初始化")

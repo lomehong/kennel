@@ -7,8 +7,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/hashicorp/go-hclog"
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // Client 定义WebSocket客户端
@@ -33,7 +32,7 @@ type Client struct {
 	heartbeatTimer *time.Timer
 
 	// 日志
-	logger logger.Logger
+	logger logging.Logger
 
 	// 客户端信息
 	clientInfo map[string]interface{}
@@ -43,10 +42,21 @@ type Client struct {
 }
 
 // NewClient 创建一个新的WebSocket客户端
-func NewClient(config ConnectionConfig, log logger.Logger) *Client {
+func NewClient(config ConnectionConfig, log logging.Logger) *Client {
 	if log == nil {
-		// 使用默认日志器
-		log = logger.NewLogger("comm-client", hclog.Info)
+		// 创建默认日志配置
+		logConfig := logging.DefaultLogConfig()
+		logConfig.Level = logging.LogLevelInfo
+
+		// 创建增强日志记录器
+		enhancedLogger, err := logging.NewEnhancedLogger(logConfig)
+		if err != nil {
+			// 如果创建失败，使用默认配置
+			enhancedLogger, _ = logging.NewEnhancedLogger(nil)
+		}
+
+		// 设置名称
+		log = enhancedLogger.Named("comm-client")
 	}
 
 	return &Client{

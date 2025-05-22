@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lomehong/kennel/app/control/ai"
-	"github.com/lomehong/kennel/app/control/ai/mcp"
+	"github.com/lomehong/kennel/app/control/pkg/ai"
+	"github.com/lomehong/kennel/app/control/pkg/ai/mcp"
 	sdk "github.com/lomehong/kennel/pkg/sdk/go"
 )
 

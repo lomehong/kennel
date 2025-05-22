@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/logging"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
@@ -19,7 +19,7 @@ import (
 
 // Monitor 系统监控器，负责收集系统指标
 type Monitor struct {
-	logger       logger.Logger
+	logger       logging.Logger
 	startTime    time.Time
 	lastCPUStat  []cpu.InfoStat
 	lastNetStat  []net.IOCountersStat
@@ -28,9 +28,21 @@ type Monitor struct {
 }
 
 // NewMonitor 创建一个新的系统监控器
-func NewMonitor(log logger.Logger) *Monitor {
+func NewMonitor(log logging.Logger) *Monitor {
 	if log == nil {
-		log = logger.NewLogger("system-monitor", logger.GetLogLevel("info"))
+		// 创建默认日志配置
+		config := logging.DefaultLogConfig()
+		config.Level = logging.LogLevelInfo
+		
+		// 创建增强日志记录器
+		enhancedLogger, err := logging.NewEnhancedLogger(config)
+		if err != nil {
+			// 如果创建失败，使用默认配置
+			enhancedLogger, _ = logging.NewEnhancedLogger(nil)
+		}
+		
+		// 设置名称
+		log = enhancedLogger.Named("system-monitor")
 	}
 
 	return &Monitor{
