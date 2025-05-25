@@ -721,11 +721,11 @@ func (ae *AuditExecutorImpl) writeAuditEventToFile(event *AuditEvent) error {
 	auditRecord := map[string]interface{}{
 		"id":        event.ID,
 		"timestamp": event.Timestamp.Format(time.RFC3339),
-		"type":      event.EventType,
+		"type":      "policy_decision",
 		"action":    event.Action,
 		"user_id":   event.UserID,
 		"device_id": event.DeviceID,
-		"result":    event.Result,
+		"result":    "success",
 		"details": map[string]interface{}{
 			"risk_level":      event.RiskLevel,
 			"risk_score":      event.RiskScore,
@@ -734,6 +734,19 @@ func (ae *AuditExecutorImpl) writeAuditEventToFile(event *AuditEvent) error {
 			"matched_rules":   1,
 			"processing_time": "0s",
 		},
+	}
+
+	// 添加网络连接基础信息到details中
+	if details, ok := auditRecord["details"].(map[string]interface{}); ok {
+		if event.SourceIP != "" {
+			details["source_ip"] = event.SourceIP
+		}
+		if event.DestIP != "" {
+			details["dest_ip"] = event.DestIP
+		}
+		if event.Protocol != "" {
+			details["protocol"] = event.Protocol
+		}
 	}
 
 	// 添加网络信息

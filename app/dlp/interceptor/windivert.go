@@ -4,6 +4,7 @@ package interceptor
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -102,6 +103,9 @@ type WinDivertInterceptorImpl struct {
 	driverManager *WinDivertDriverManager
 	installer     *WinDivertInstaller
 
+	// 增强进程管理器
+	enhancedProcessManager *EnhancedProcessManager
+
 	// WinDivert API 函数
 	winDivertOpen              *syscall.LazyProc
 	winDivertRecv              *syscall.LazyProc
@@ -119,6 +123,17 @@ func NewWinDivertInterceptor(logger logging.Logger) TrafficInterceptor {
 		processTracker: NewProcessTracker(logger),
 		driverManager:  NewWinDivertDriverManager(logger),
 		installer:      NewWinDivertInstaller(logger),
+	}
+
+	// 初始化增强进程管理器
+	config := DefaultProcessManagerConfig()
+	enhancedManager, err := NewEnhancedProcessManager(logger, config)
+	if err != nil {
+		logger.Error("初始化增强进程管理器失败", "error", err)
+		// 继续使用传统进程跟踪器作为备选
+	} else {
+		interceptor.enhancedProcessManager = enhancedManager
+		logger.Info("增强进程管理器初始化成功")
 	}
 
 	// 加载WinDivert DLL
@@ -274,12 +289,25 @@ func (w *WinDivertInterceptorImpl) Start() error {
 
 	w.handle = syscall.Handle(handle)
 
-	// 启动进程跟踪器
-	w.processTracker.StartPeriodicUpdate(5 * time.Second)
-
-	// 初始化连接表
-	if err := w.processTracker.UpdateConnectionTables(); err != nil {
-		w.logger.Warn("初始化连接表失败", "error", err)
+	// 启动增强进程管理器（优先）或传统进程跟踪器（备选）
+	if w.enhancedProcessManager != nil {
+		if err := w.enhancedProcessManager.Start(); err != nil {
+			w.logger.Error("启动增强进程管理器失败，使用传统进程跟踪器", "error", err)
+			w.enhancedProcessManager = nil
+			// 启动传统进程跟踪器作为备选
+			w.processTracker.StartPeriodicUpdate(5 * time.Second)
+			if err := w.processTracker.UpdateConnectionTables(); err != nil {
+				w.logger.Warn("初始化连接表失败", "error", err)
+			}
+		} else {
+			w.logger.Info("增强进程管理器启动成功")
+		}
+	} else {
+		// 使用传统进程跟踪器
+		w.processTracker.StartPeriodicUpdate(5 * time.Second)
+		if err := w.processTracker.UpdateConnectionTables(); err != nil {
+			w.logger.Warn("初始化连接表失败", "error", err)
+		}
 	}
 
 	// 启动数据包接收协程
@@ -309,6 +337,15 @@ func (w *WinDivertInterceptorImpl) Stop() error {
 
 	// 发送停止信号
 	close(w.stopCh)
+
+	// 停止增强进程管理器或传统进程跟踪器
+	if w.enhancedProcessManager != nil {
+		if err := w.enhancedProcessManager.Stop(); err != nil {
+			w.logger.Error("停止增强进程管理器失败", "error", err)
+		}
+	} else if w.processTracker != nil {
+		w.processTracker.StopPeriodicUpdate()
+	}
 
 	// 关闭WinDivert句柄
 	if w.handle != syscall.InvalidHandle {
@@ -838,59 +875,122 @@ func (w *WinDivertInterceptorImpl) parseUDPHeader(packet *PacketInfo, data []byt
 	return nil
 }
 
-// getProcessInfo 获取进程信息（增强版本 - 多策略查找）
+// getProcessInfo 获取进程信息（增强版本 - 使用新的进程管理器）
 func (w *WinDivertInterceptorImpl) getProcessInfo(packet *PacketInfo) *ProcessInfo {
-	// 策略1：四元组精确匹配（TCP连接）
-	var pid uint32
+	// 记录开始时间用于性能监控
+	startTime := time.Now()
 
-	if packet.Protocol == ProtocolTCP {
-		if packet.Direction == PacketDirectionOutbound {
-			// 出站：本地是源，远程是目标
-			pid = w.processTracker.GetProcessByConnectionEx(
-				packet.Protocol,
-				packet.SourceIP, packet.SourcePort,
-				packet.DestIP, packet.DestPort,
-			)
+	// 优先使用增强进程管理器
+	if w.enhancedProcessManager != nil && w.enhancedProcessManager.IsRunning() {
+		processInfo := w.enhancedProcessManager.GetProcessInfo(packet)
+
+		processingTime := time.Since(startTime)
+
+		if processInfo != nil && processInfo.PID > 0 {
+			w.logger.Debug("增强进程管理器成功获取进程信息",
+				"pid", processInfo.PID,
+				"name", processInfo.ProcessName,
+				"path", processInfo.ExecutePath,
+				"user", processInfo.User,
+				"direction", packet.Direction,
+				"protocol", packet.Protocol,
+				"processing_time", processingTime)
+			return processInfo
 		} else {
-			// 入站：本地是目标，远程是源
-			pid = w.processTracker.GetProcessByConnectionEx(
-				packet.Protocol,
-				packet.DestIP, packet.DestPort,
-				packet.SourceIP, packet.SourcePort,
-			)
+			w.logger.Debug("增强进程管理器未找到进程信息",
+				"direction", packet.Direction,
+				"protocol", packet.Protocol,
+				"source", fmt.Sprintf("%s:%d", packet.SourceIP, packet.SourcePort),
+				"dest", fmt.Sprintf("%s:%d", packet.DestIP, packet.DestPort),
+				"processing_time", processingTime)
+		}
+	}
+
+	// 备选方案：使用传统进程跟踪器
+	if w.processTracker == nil {
+		w.logger.Debug("进程跟踪器未初始化")
+		return &ProcessInfo{
+			PID:         0,
+			ProcessName: "unknown_process",
+			ExecutePath: "",
+			User:        "unknown",
+			CommandLine: "",
+		}
+	}
+
+	var pid uint32
+	var matchStrategy string
+
+	// 确定查找参数
+	var localIP net.IP
+	var localPort uint16
+	var remoteIP net.IP
+	var remotePort uint16
+
+	if packet.Direction == PacketDirectionOutbound {
+		// 出站：本地是源，远程是目标
+		localIP = packet.SourceIP
+		localPort = packet.SourcePort
+		remoteIP = packet.DestIP
+		remotePort = packet.DestPort
+	} else {
+		// 入站：本地是目标，远程是源
+		localIP = packet.DestIP
+		localPort = packet.DestPort
+		remoteIP = packet.SourceIP
+		remotePort = packet.SourcePort
+	}
+
+	w.logger.Debug("使用传统进程跟踪器查找进程信息",
+		"direction", packet.Direction,
+		"protocol", packet.Protocol,
+		"local", fmt.Sprintf("%s:%d", localIP, localPort),
+		"remote", fmt.Sprintf("%s:%d", remoteIP, remotePort))
+
+	// 策略1：尝试四元组匹配（TCP连接的完整匹配）
+	if packet.Protocol == ProtocolTCP {
+		pid = w.processTracker.GetProcessByConnectionEx(
+			packet.Protocol,
+			localIP, localPort,
+			remoteIP, remotePort,
+		)
+		if pid != 0 {
+			matchStrategy = "四元组匹配"
 		}
 	}
 
 	// 策略2：如果四元组匹配失败，使用本地连接匹配
 	if pid == 0 {
-		if packet.Direction == PacketDirectionOutbound {
-			pid = w.processTracker.GetProcessByConnection(packet.Protocol, packet.SourceIP, packet.SourcePort)
-		} else {
-			pid = w.processTracker.GetProcessByConnection(packet.Protocol, packet.DestIP, packet.DestPort)
+		pid = w.processTracker.GetProcessByConnection(packet.Protocol, localIP, localPort)
+		if pid != 0 {
+			matchStrategy = "本地连接匹配"
 		}
 	}
 
 	// 策略3：如果仍然失败，尝试强制更新连接表后再次查找
 	if pid == 0 {
-		w.logger.Debug("首次查找失败，强制更新连接表后重试")
+		w.logger.Debug("首次查找失败，强制更新连接表后重试",
+			"protocol", packet.Protocol,
+			"local", fmt.Sprintf("%s:%d", localIP, localPort))
+
 		if err := w.processTracker.UpdateConnectionTables(); err != nil {
 			w.logger.Error("强制更新连接表失败", "error", err)
 		} else {
 			// 重新尝试查找
-			if packet.Direction == PacketDirectionOutbound {
-				pid = w.processTracker.GetProcessByConnection(packet.Protocol, packet.SourceIP, packet.SourcePort)
-			} else {
-				pid = w.processTracker.GetProcessByConnection(packet.Protocol, packet.DestIP, packet.DestPort)
+			pid = w.processTracker.GetProcessByConnection(packet.Protocol, localIP, localPort)
+			if pid != 0 {
+				matchStrategy = "更新后匹配"
 			}
 		}
 	}
 
 	if pid == 0 {
-		w.logger.Debug("所有策略都未找到对应的进程",
+		w.logger.Debug("传统进程跟踪器所有策略都未找到对应的进程",
 			"direction", packet.Direction,
 			"protocol", packet.Protocol,
-			"source", fmt.Sprintf("%s:%d", packet.SourceIP, packet.SourcePort),
-			"dest", fmt.Sprintf("%s:%d", packet.DestIP, packet.DestPort))
+			"local", fmt.Sprintf("%s:%d", localIP, localPort),
+			"remote", fmt.Sprintf("%s:%d", remoteIP, remotePort),
+			"processing_time", time.Since(startTime))
 
 		// 返回一个包含基本信息的ProcessInfo，而不是nil
 		return &ProcessInfo{
@@ -905,7 +1005,7 @@ func (w *WinDivertInterceptorImpl) getProcessInfo(packet *PacketInfo) *ProcessIn
 	// 从进程跟踪器获取详细进程信息
 	processInfo := w.processTracker.GetProcessInfo(pid)
 	if processInfo == nil {
-		w.logger.Debug("获取进程详细信息失败", "pid", pid)
+		w.logger.Debug("获取进程详细信息失败", "pid", pid, "match_strategy", matchStrategy)
 		// 返回基本的进程信息
 		return &ProcessInfo{
 			PID:         int(pid),
@@ -916,13 +1016,16 @@ func (w *WinDivertInterceptorImpl) getProcessInfo(packet *PacketInfo) *ProcessIn
 		}
 	}
 
-	w.logger.Debug("成功获取进程信息",
+	processingTime := time.Since(startTime)
+	w.logger.Debug("传统进程跟踪器成功获取进程信息",
 		"pid", processInfo.PID,
 		"name", processInfo.ProcessName,
 		"path", processInfo.ExecutePath,
 		"user", processInfo.User,
 		"direction", packet.Direction,
-		"protocol", packet.Protocol)
+		"protocol", packet.Protocol,
+		"match_strategy", matchStrategy,
+		"processing_time", processingTime)
 
 	return processInfo
 }

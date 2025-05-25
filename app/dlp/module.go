@@ -61,6 +61,13 @@ type DLPConfig struct {
 	ExecutorConfig            executor.ExecutorConfig       `yaml:"executor_config" json:"executor_config"`
 	MaxConcurrency            int                           `yaml:"max_concurrency" json:"max_concurrency"`
 	BufferSize                int                           `yaml:"buffer_size" json:"buffer_size"`
+
+	// OCR和ML相关配置
+	OCRConfig            map[string]interface{} `yaml:"ocr_config" json:"ocr_config"`
+	MLConfig             map[string]interface{} `yaml:"ml_config" json:"ml_config"`
+	FileDetectionConfig  map[string]interface{} `yaml:"file_detection_config" json:"file_detection_config"`
+	OCRPerformanceConfig map[string]interface{} `yaml:"ocr_performance_config" json:"ocr_performance_config"`
+	OCRLoggingConfig     map[string]interface{} `yaml:"ocr_logging_config" json:"ocr_logging_config"`
 }
 
 // ProcessingTask 处理任务
@@ -183,6 +190,62 @@ func (m *DLPModule) parseDLPConfig(config *plugin.ModuleConfig) error {
 	m.dlpConfig.ExecutorConfig = executor.DefaultExecutorConfig()
 	m.dlpConfig.ExecutorConfig.Logger = enhancedLogger.Named("executor")
 
+	// 解析OCR和ML配置
+	if err := m.parseOCRAndMLConfig(config); err != nil {
+		m.Logger.Warn("解析OCR和ML配置失败", "error", err)
+		// 不返回错误，允许系统继续运行
+	}
+
+	return nil
+}
+
+// parseOCRAndMLConfig 解析OCR和ML配置
+func (m *DLPModule) parseOCRAndMLConfig(config *plugin.ModuleConfig) error {
+	// 从主配置文件中读取OCR配置
+	if ocrConfig, ok := config.Settings["ocr"].(map[string]interface{}); ok {
+		m.dlpConfig.OCRConfig = ocrConfig
+		m.Logger.Info("已加载OCR配置", "enabled", ocrConfig["enabled"])
+	} else {
+		m.Logger.Info("未找到OCR配置，使用默认设置")
+		m.dlpConfig.OCRConfig = map[string]interface{}{
+			"enabled": false,
+		}
+	}
+
+	// 从主配置文件中读取ML配置
+	if mlConfig, ok := config.Settings["ml"].(map[string]interface{}); ok {
+		m.dlpConfig.MLConfig = mlConfig
+		m.Logger.Info("已加载ML配置", "enabled", mlConfig["enabled"])
+	} else {
+		m.Logger.Info("未找到ML配置，使用默认设置")
+		m.dlpConfig.MLConfig = map[string]interface{}{
+			"enabled": false,
+		}
+	}
+
+	// 从主配置文件中读取文件检测配置
+	if fileDetectionConfig, ok := config.Settings["file_detection"].(map[string]interface{}); ok {
+		m.dlpConfig.FileDetectionConfig = fileDetectionConfig
+		m.Logger.Info("已加载文件检测配置", "enabled", fileDetectionConfig["enabled"])
+	} else {
+		m.Logger.Info("未找到文件检测配置，使用默认设置")
+		m.dlpConfig.FileDetectionConfig = map[string]interface{}{
+			"enabled": true,
+		}
+	}
+
+	// 从主配置文件中读取OCR性能配置
+	if ocrPerfConfig, ok := config.Settings["ocr_performance"].(map[string]interface{}); ok {
+		m.dlpConfig.OCRPerformanceConfig = ocrPerfConfig
+		m.Logger.Info("已加载OCR性能配置")
+	}
+
+	// 从主配置文件中读取OCR日志配置
+	if ocrLogConfig, ok := config.Settings["ocr_logging"].(map[string]interface{}); ok {
+		m.dlpConfig.OCRLoggingConfig = ocrLogConfig
+		m.Logger.Info("已加载OCR日志配置")
+	}
+
 	return nil
 }
 
@@ -219,7 +282,112 @@ func (m *DLPModule) initializeCoreComponents() error {
 		return fmt.Errorf("注册文本分析器失败: %w", err)
 	}
 
+	// 配置OCR和ML功能
+	if err := m.configureOCRAndML(textAnalyzer); err != nil {
+		m.Logger.Warn("配置OCR和ML功能失败", "error", err)
+		// 不返回错误，允许系统继续运行
+	}
+
 	m.Logger.Info("DLP核心组件初始化完成")
+	return nil
+}
+
+// configureOCRAndML 配置OCR和ML功能
+func (m *DLPModule) configureOCRAndML(textAnalyzer analyzer.ContentAnalyzer) error {
+	// 类型断言获取TextAnalyzer
+	ta, ok := textAnalyzer.(*analyzer.TextAnalyzer)
+	if !ok {
+		return fmt.Errorf("无法转换为TextAnalyzer类型")
+	}
+
+	// 配置OCR功能
+	if m.dlpConfig.OCRConfig != nil {
+		if enabled, ok := m.dlpConfig.OCRConfig["enabled"].(bool); ok && enabled {
+			m.Logger.Info("启用OCR功能")
+
+			// 构建OCR配置
+			ocrConfig := make(map[string]interface{})
+
+			// 从tesseract子配置中提取参数
+			if tesseractConfig, ok := m.dlpConfig.OCRConfig["tesseract"].(map[string]interface{}); ok {
+				// 语言配置
+				if languages, ok := tesseractConfig["languages"].([]interface{}); ok {
+					langStrings := make([]string, len(languages))
+					for i, lang := range languages {
+						if langStr, ok := lang.(string); ok {
+							langStrings[i] = langStr
+						}
+					}
+					ocrConfig["languages"] = langStrings
+				}
+
+				// 其他配置参数
+				if timeoutSec, ok := tesseractConfig["timeout_seconds"].(int); ok {
+					ocrConfig["timeout_seconds"] = timeoutSec
+				}
+				if maxSize, ok := tesseractConfig["max_image_size"].(int); ok {
+					ocrConfig["max_image_size"] = int64(maxSize)
+				}
+				if enablePreproc, ok := tesseractConfig["enable_preprocessing"].(bool); ok {
+					ocrConfig["enable_preprocessing"] = enablePreproc
+				}
+				if tesseractPath, ok := tesseractConfig["tesseract_path"].(string); ok {
+					ocrConfig["tesseract_path"] = tesseractPath
+				}
+			}
+
+			// 启用OCR
+			if err := ta.EnableOCR(ocrConfig); err != nil {
+				m.Logger.Warn("启用OCR功能失败", "error", err)
+				return fmt.Errorf("启用OCR功能失败: %w", err)
+			}
+		} else {
+			m.Logger.Info("OCR功能已禁用")
+		}
+	}
+
+	// 配置ML功能
+	if m.dlpConfig.MLConfig != nil {
+		if enabled, ok := m.dlpConfig.MLConfig["enabled"].(bool); ok && enabled {
+			m.Logger.Info("启用ML功能")
+
+			// 构建ML配置
+			mlConfig := make(map[string]interface{})
+
+			// 从simple_model子配置中提取参数
+			if simpleModelConfig, ok := m.dlpConfig.MLConfig["simple_model"].(map[string]interface{}); ok {
+				// 敏感关键词
+				if keywords, ok := simpleModelConfig["sensitive_keywords"].([]interface{}); ok {
+					keywordStrings := make([]string, len(keywords))
+					for i, keyword := range keywords {
+						if keywordStr, ok := keyword.(string); ok {
+							keywordStrings[i] = keywordStr
+						}
+					}
+					mlConfig["sensitive_keywords"] = keywordStrings
+				}
+
+				// 置信度阈值
+				if threshold, ok := simpleModelConfig["confidence_threshold"].(float64); ok {
+					mlConfig["confidence_threshold"] = threshold
+				}
+
+				// 风险评分阈值
+				if riskThreshold, ok := simpleModelConfig["risk_threshold"].(float64); ok {
+					mlConfig["risk_threshold"] = riskThreshold
+				}
+			}
+
+			// 启用ML
+			if err := ta.EnableML(mlConfig); err != nil {
+				m.Logger.Warn("启用ML功能失败", "error", err)
+				return fmt.Errorf("启用ML功能失败: %w", err)
+			}
+		} else {
+			m.Logger.Info("ML功能已禁用")
+		}
+	}
+
 	return nil
 }
 

@@ -95,8 +95,14 @@ type InterceptorConfig struct {
 // DefaultInterceptorConfig 返回默认拦截器配置（性能优化版本）
 func DefaultInterceptorConfig() InterceptorConfig {
 	return InterceptorConfig{
-		// 使用嗅探模式，不阻断流量
-		Filter:       "outbound and (tcp.DstPort == 80 or tcp.DstPort == 443 or tcp.DstPort == 21 or tcp.DstPort == 25 or tcp.DstPort == 3306)",
+		// 优化过滤器：排除本地和私有网络流量，只监控公网流量
+		Filter: "outbound and " +
+			"(tcp.DstPort == 80 or tcp.DstPort == 443 or tcp.DstPort == 21 or tcp.DstPort == 25 or tcp.DstPort == 3306) and " +
+			"not (ip.DstAddr >= 127.0.0.0 and ip.DstAddr <= 127.255.255.255) and " + // 排除本地回环
+			"not (ip.DstAddr >= 10.0.0.0 and ip.DstAddr <= 10.255.255.255) and " + // 排除私有网络A类
+			"not (ip.DstAddr >= 172.16.0.0 and ip.DstAddr <= 172.31.255.255) and " + // 排除私有网络B类
+			"not (ip.DstAddr >= 192.168.0.0 and ip.DstAddr <= 192.168.255.255) and " + // 排除私有网络C类
+			"not (ip.DstAddr >= 169.254.0.0 and ip.DstAddr <= 169.254.255.255)", // 排除链路本地地址
 		BufferSize:   32768, // 减小缓冲区，降低内存占用
 		ChannelSize:  500,   // 减小通道大小，避免积压过多数据包
 		Priority:     0,
@@ -106,7 +112,7 @@ func DefaultInterceptorConfig() InterceptorConfig {
 		WorkerCount:  2,    // 减少工作协程数，降低CPU占用
 		CacheSize:    500,  // 减小缓存大小
 		Interface:    "en0",
-		BypassCIDR:   "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16", // 绕过本地和私有网络
+		BypassCIDR:   "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16", // 绕过本地和私有网络
 		ProxyPort:    8080,
 		Mode:         ModeMonitorOnly, // 默认使用监控模式
 		AutoReinject: true,            // 自动重新注入数据包
@@ -207,4 +213,109 @@ type InterceptorManager interface {
 
 	// GetStats 获取所有拦截器统计信息
 	GetStats() map[string]InterceptorStats
+}
+
+// ===== ETW 相关类型定义 =====
+
+// ConnectionState 连接状态
+type ConnectionState int
+
+const (
+	ConnectionStateEstablished ConnectionState = iota
+	ConnectionStateConnecting
+	ConnectionStateClosing
+	ConnectionStateClosed
+)
+
+func (s ConnectionState) String() string {
+	switch s {
+	case ConnectionStateEstablished:
+		return "established"
+	case ConnectionStateConnecting:
+		return "connecting"
+	case ConnectionStateClosing:
+		return "closing"
+	case ConnectionStateClosed:
+		return "closed"
+	default:
+		return "unknown"
+	}
+}
+
+// ConnectionInfo 连接信息
+type ConnectionInfo struct {
+	Protocol   Protocol
+	LocalAddr  *net.TCPAddr
+	RemoteAddr *net.TCPAddr
+	State      ConnectionState
+	Timestamp  time.Time
+	ProcessID  uint32
+}
+
+// NetworkEventType 网络事件类型
+type NetworkEventType int
+
+const (
+	NetworkEventTypeConnect NetworkEventType = iota
+	NetworkEventTypeDisconnect
+	NetworkEventTypeAccept
+	NetworkEventTypeClose
+)
+
+func (t NetworkEventType) String() string {
+	switch t {
+	case NetworkEventTypeConnect:
+		return "connect"
+	case NetworkEventTypeDisconnect:
+		return "disconnect"
+	case NetworkEventTypeAccept:
+		return "accept"
+	case NetworkEventTypeClose:
+		return "close"
+	default:
+		return "unknown"
+	}
+}
+
+// ETWNetworkEvent ETW网络事件数据
+type ETWNetworkEvent struct {
+	EventType   NetworkEventType
+	ProcessID   uint32
+	ThreadID    uint32
+	Connection  *ConnectionInfo
+	Timestamp   time.Time
+	ProcessName string
+	ProcessPath string
+}
+
+// ProcessDataSource 进程数据源接口
+type ProcessDataSource interface {
+	GetProcessInfo(packet *PacketInfo) *ProcessInfo
+	Priority() int
+	Name() string
+}
+
+// ETWNetworkMonitor ETW网络事件监听器接口
+type ETWNetworkMonitor interface {
+	Start() error
+	Stop() error
+	GetConnectionMapping(localAddr, remoteAddr net.Addr) *ProcessInfo
+	IsRunning() bool
+	GetEventChannel() <-chan *ETWNetworkEvent
+}
+
+// ConnectionMapper 进程-连接映射管理器接口
+type ConnectionMapper interface {
+	AddMapping(conn *ConnectionInfo, proc *ProcessInfo)
+	GetProcessByConnection(conn *ConnectionInfo) *ProcessInfo
+	GetProcessByAddresses(protocol Protocol, localAddr, remoteAddr net.Addr) *ProcessInfo
+	CleanExpiredMappings()
+	GetMappingCount() int
+}
+
+// ProcessResolver 统一进程信息解析器接口
+type ProcessResolver interface {
+	ResolveProcess(packet *PacketInfo) *ProcessInfo
+	RegisterDataSource(source ProcessDataSource)
+	GetDataSources() []ProcessDataSource
 }

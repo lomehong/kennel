@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lomehong/kennel/app/dlp/engine"
@@ -19,6 +20,7 @@ type NetworkInfoExtractor struct {
 	logger    logging.Logger
 	dnsCache  map[string]string // IP到域名的缓存
 	cacheTime map[string]time.Time
+	mutex     sync.RWMutex // 保护缓存的读写锁
 }
 
 // NewNetworkInfoExtractor 创建网络信息提取器
@@ -51,6 +53,11 @@ func (nie *NetworkInfoExtractor) ExtractNetworkInfo(decision *engine.PolicyDecis
 		parsedData := decision.Context.ParsedData
 		networkInfo.RequestURL = nie.extractRequestURL(parsedData)
 		networkInfo.RequestData = nie.extractRequestData(parsedData)
+
+		// 对于HTTPS，尝试从SNI或其他元数据中提取域名
+		if networkInfo.DestDomain == "" {
+			networkInfo.DestDomain = nie.extractDomainFromParsedData(parsedData)
+		}
 	}
 
 	return networkInfo
@@ -343,27 +350,92 @@ func (nie *NetworkInfoExtractor) sanitizeData(data string) string {
 
 // resolveDomain 解析IP地址对应的域名
 func (nie *NetworkInfoExtractor) resolveDomain(ip string) string {
-	// 检查缓存
+	// 使用读锁检查缓存
+	nie.mutex.RLock()
 	if domain, exists := nie.dnsCache[ip]; exists {
 		// 检查缓存是否过期（5分钟）
 		if time.Since(nie.cacheTime[ip]) < 5*time.Minute {
+			nie.mutex.RUnlock()
+			return domain
+		}
+	}
+	nie.mutex.RUnlock()
+
+	// 使用写锁清理过期缓存
+	nie.mutex.Lock()
+	// 再次检查，防止并发情况下重复清理
+	if domain, exists := nie.dnsCache[ip]; exists {
+		if time.Since(nie.cacheTime[ip]) < 5*time.Minute {
+			nie.mutex.Unlock()
 			return domain
 		}
 		// 清理过期缓存
 		delete(nie.dnsCache, ip)
 		delete(nie.cacheTime, ip)
 	}
+	nie.mutex.Unlock()
 
 	// 尝试反向DNS查询（非阻塞）
 	go func() {
 		if names, err := net.LookupAddr(ip); err == nil && len(names) > 0 {
 			domain := strings.TrimSuffix(names[0], ".")
+
+			// 使用写锁更新缓存
+			nie.mutex.Lock()
 			nie.dnsCache[ip] = domain
 			nie.cacheTime[ip] = time.Now()
+			nie.mutex.Unlock()
+
 			nie.logger.Debug("DNS解析成功", "ip", ip, "domain", domain)
 		}
 	}()
 
 	// 立即返回空字符串，不阻塞主流程
+	return ""
+}
+
+// extractDomainFromParsedData 从解析数据中提取域名
+func (nie *NetworkInfoExtractor) extractDomainFromParsedData(parsedData *parser.ParsedData) string {
+	if parsedData == nil || parsedData.Metadata == nil {
+		return ""
+	}
+
+	// 优先从SNI中提取
+	if serverName, ok := parsedData.Metadata["server_name"].(string); ok && serverName != "" {
+		nie.logger.Debug("从SNI提取域名", "domain", serverName)
+		return serverName
+	}
+
+	// 从Host头部提取
+	if parsedData.Headers != nil {
+		if host := parsedData.Headers["Host"]; host != "" {
+			nie.logger.Debug("从Host头部提取域名", "domain", host)
+			return host
+		}
+		if host := parsedData.Headers["host"]; host != "" {
+			nie.logger.Debug("从host头部提取域名", "domain", host)
+			return host
+		}
+	}
+
+	// 从其他元数据中提取
+	if domain, ok := parsedData.Metadata["domain"].(string); ok && domain != "" {
+		nie.logger.Debug("从domain元数据提取域名", "domain", domain)
+		return domain
+	}
+
+	if host, ok := parsedData.Metadata["host"].(string); ok && host != "" {
+		nie.logger.Debug("从host元数据提取域名", "domain", host)
+		return host
+	}
+
+	// 尝试从URL中提取
+	if parsedData.URL != "" {
+		if u, err := url.Parse(parsedData.URL); err == nil && u.Host != "" {
+			nie.logger.Debug("从URL提取域名", "domain", u.Host)
+			return u.Host
+		}
+	}
+
 	return ""
 }

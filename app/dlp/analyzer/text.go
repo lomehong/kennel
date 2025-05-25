@@ -94,6 +94,12 @@ func (ta *TextAnalyzer) Analyze(ctx context.Context, data *parser.ParsedData) (*
 		return nil, fmt.Errorf("内容大小超过限制: %d > %d", len(data.Body), ta.config.MaxContentSize)
 	}
 
+	// 检查是否为加密内容
+	isEncrypted := false
+	if encrypted, ok := data.Metadata["encrypted"].(bool); ok && encrypted {
+		isEncrypted = true
+	}
+
 	// 提取文本内容
 	text := string(data.Body)
 	if text == "" {
@@ -108,6 +114,21 @@ func (ta *TextAnalyzer) Analyze(ctx context.Context, data *parser.ParsedData) (*
 			ta.logger.Warn("OCR文本提取失败", "error", err)
 		} else {
 			text = ocrText
+		}
+	}
+
+	// 对于加密内容，采用特殊处理策略
+	if isEncrypted && text == "" {
+		ta.logger.Debug("检测到加密内容，使用元数据分析",
+			"protocol", data.Protocol,
+			"content_type", data.ContentType)
+
+		// 从元数据中提取可分析的信息
+		text = ta.extractTextFromData(data)
+
+		// 如果仍然没有可分析的文本，创建一个基于元数据的分析结果
+		if text == "" {
+			return ta.createEncryptedContentResult(data), nil
 		}
 	}
 
@@ -253,6 +274,59 @@ func (ta *TextAnalyzer) extractTextFromData(data *parser.ParsedData) string {
 	}
 
 	return text.String()
+}
+
+// createEncryptedContentResult 为加密内容创建分析结果
+func (ta *TextAnalyzer) createEncryptedContentResult(data *parser.ParsedData) *AnalysisResult {
+	result := &AnalysisResult{
+		ID:              fmt.Sprintf("encrypted_%d", time.Now().UnixNano()),
+		Timestamp:       time.Now(),
+		ContentType:     data.ContentType,
+		SensitiveData:   make([]*SensitiveDataInfo, 0),
+		RiskLevel:       RiskLevelLow,
+		RiskScore:       0.0,
+		Confidence:      0.5, // 加密内容的置信度较低
+		Categories:      []string{"encrypted"},
+		Tags:            []string{"encrypted_content"},
+		Metadata:        make(map[string]interface{}),
+		AnalyzerResults: make(map[string]interface{}),
+		ProcessingTime:  time.Since(time.Now()),
+	}
+
+	// 添加加密内容的元数据
+	result.Metadata["is_encrypted"] = true
+	result.Metadata["protocol"] = data.Protocol
+	result.Metadata["content_length"] = len(data.Body)
+
+	// 从解析数据的元数据中提取有用信息
+	for key, value := range data.Metadata {
+		switch key {
+		case "server_name", "host", "url", "method", "status_code":
+			// 这些信息即使在加密情况下也可能有用
+			result.Metadata[key] = value
+		case "tls_version", "cipher_suites", "certificates":
+			// TLS相关信息
+			result.Metadata[key] = value
+		}
+	}
+
+	// 基于协议和元数据进行基础风险评估
+	if data.Protocol == "https" {
+		// HTTPS流量通常是正常的
+		result.RiskLevel = RiskLevelLow
+		result.RiskScore = 0.1
+	} else {
+		// 其他加密协议可能需要更多关注
+		result.RiskLevel = RiskLevelMedium
+		result.RiskScore = 0.3
+	}
+
+	ta.logger.Debug("创建加密内容分析结果",
+		"protocol", data.Protocol,
+		"content_type", data.ContentType,
+		"risk_level", result.RiskLevel)
+
+	return result
 }
 
 // analyzeWithRegex 使用正则表达式分析

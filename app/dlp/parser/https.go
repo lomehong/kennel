@@ -98,8 +98,18 @@ func (h *HTTPSParser) Parse(packet *interceptor.PacketInfo) (*ParsedData, error)
 		err = h.parseAlert(tlsRecord, parsedData)
 	case 20: // Change Cipher Spec
 		err = h.parseChangeCipherSpec(tlsRecord, parsedData)
+	case 24: // Heartbeat
+		err = h.parseHeartbeat(tlsRecord, parsedData)
+	case 25: // TLS 1.3 Application Data
+		err = h.parseApplicationData(tlsRecord, parsedData, packet)
+	case 69: // 未知但常见的TLS内容类型，可能是加密的应用数据
+		err = h.parseEncryptedApplicationData(tlsRecord, parsedData, packet)
 	default:
-		h.logger.Warn("未知的TLS内容类型", "content_type", tlsRecord.ContentType)
+		// 对于其他未知的TLS内容类型，作为加密数据处理
+		h.logger.Debug("未知的TLS内容类型，作为加密数据处理",
+			"content_type", tlsRecord.ContentType,
+			"data_length", len(tlsRecord.Data))
+		err = h.parseEncryptedApplicationData(tlsRecord, parsedData, packet)
 	}
 
 	if err != nil {
@@ -160,14 +170,20 @@ func (h *HTTPSParser) isTLSPacket(data []byte) bool {
 	contentType := data[0]
 	version := uint16(data[1])<<8 | uint16(data[2])
 
-	// 检查内容类型
-	validContentTypes := []uint8{20, 21, 22, 23}
+	// 检查内容类型 - 扩展支持更多TLS内容类型
+	validContentTypes := []uint8{20, 21, 22, 23, 24, 25, 69} // 添加更多有效的TLS内容类型
 	isValidContentType := false
 	for _, ct := range validContentTypes {
 		if contentType == ct {
 			isValidContentType = true
 			break
 		}
+	}
+
+	// 对于未知但可能的TLS内容类型，进行更宽松的检查
+	if !isValidContentType && contentType >= 20 && contentType <= 255 {
+		// 如果端口是443，更可能是TLS流量
+		isValidContentType = true
 	}
 
 	// 检查版本
@@ -179,7 +195,14 @@ func (h *HTTPSParser) isTLSPacket(data []byte) bool {
 // parseTLSRecord 解析TLS记录
 func (h *HTTPSParser) parseTLSRecord(data []byte) (*TLSRecord, error) {
 	if len(data) < 5 {
-		return nil, fmt.Errorf("TLS记录长度不足")
+		// 对于不完整的TLS记录，创建一个基本记录而不是返回错误
+		h.logger.Debug("TLS记录数据不完整，创建基本记录", "data_length", len(data))
+		return &TLSRecord{
+			ContentType: 22,     // 默认为握手类型
+			Version:     0x0303, // TLS 1.2
+			Length:      uint16(len(data)),
+			Data:        data,
+		}, nil
 	}
 
 	record := &TLSRecord{
@@ -188,11 +211,21 @@ func (h *HTTPSParser) parseTLSRecord(data []byte) (*TLSRecord, error) {
 		Length:      uint16(data[3])<<8 | uint16(data[4]),
 	}
 
+	// 对于数据不完整的情况，使用实际可用的数据
 	if len(data) < int(5+record.Length) {
-		return nil, fmt.Errorf("TLS记录数据不完整")
+		h.logger.Debug("TLS记录长度超出可用数据，使用实际数据",
+			"expected_length", record.Length,
+			"available_data", len(data)-5)
+		if len(data) > 5 {
+			record.Data = data[5:]
+		} else {
+			record.Data = []byte{}
+		}
+		record.Length = uint16(len(record.Data))
+	} else {
+		record.Data = data[5 : 5+record.Length]
 	}
 
-	record.Data = data[5 : 5+record.Length]
 	return record, nil
 }
 
@@ -279,6 +312,9 @@ func (h *HTTPSParser) parseClientHello(data []byte, parsedData *ParsedData) erro
 			if sni, exists := extensions["server_name"]; exists {
 				parsedData.Metadata["server_name"] = sni
 				parsedData.Headers["Host"] = sni.(string)
+
+				// 保存到会话信息中以供后续使用
+				h.saveSessionInfo(parsedData, sni.(string))
 			}
 		}
 	}
@@ -581,4 +617,116 @@ func (h *HTTPSParser) isHTTPData(data []byte) bool {
 	}
 
 	return false
+}
+
+// parseHeartbeat 解析心跳消息
+func (h *HTTPSParser) parseHeartbeat(record *TLSRecord, parsedData *ParsedData) error {
+	h.logger.Debug("解析TLS心跳消息", "data_length", len(record.Data))
+
+	parsedData.Metadata["heartbeat"] = true
+	parsedData.Metadata["encrypted"] = false
+	parsedData.Body = record.Data
+
+	return nil
+}
+
+// parseEncryptedApplicationData 解析加密的应用数据
+func (h *HTTPSParser) parseEncryptedApplicationData(record *TLSRecord, parsedData *ParsedData, packet *interceptor.PacketInfo) error {
+	h.logger.Debug("解析加密的TLS应用数据",
+		"content_type", record.ContentType,
+		"data_length", len(record.Data))
+
+	// 标记为加密数据
+	parsedData.Metadata["encrypted"] = true
+	parsedData.Metadata["tls_encrypted_data"] = true
+	parsedData.Metadata["encrypted_length"] = len(record.Data)
+	parsedData.Body = record.Data
+
+	// 尝试从包信息中提取网络层面的信息
+	if packet != nil {
+		// 提取目标域名（如果可能）
+		if packet.DestIP != nil {
+			parsedData.Metadata["dest_ip"] = packet.DestIP.String()
+		}
+
+		// 如果是HTTPS端口，尝试提取SNI信息
+		if packet.DestPort == 443 || packet.SourcePort == 443 {
+			// 尝试从之前的握手中获取SNI信息
+			if sessionInfo := h.getSessionInfo(packet); sessionInfo != nil {
+				if sessionInfo.ServerName != "" {
+					parsedData.Metadata["server_name"] = sessionInfo.ServerName
+					parsedData.Headers["Host"] = sessionInfo.ServerName
+
+					// 构建可能的URL
+					if packet.DestPort == 443 {
+						parsedData.URL = fmt.Sprintf("https://%s/", sessionInfo.ServerName)
+						parsedData.Metadata["request_url"] = parsedData.URL
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// getSessionInfo 获取会话信息
+func (h *HTTPSParser) getSessionInfo(packet *interceptor.PacketInfo) *TLSSessionInfo {
+	if packet == nil {
+		return nil
+	}
+
+	// 构建会话键
+	sessionKey := fmt.Sprintf("%s:%d-%s:%d",
+		packet.SourceIP.String(), packet.SourcePort,
+		packet.DestIP.String(), packet.DestPort)
+
+	if session, exists := h.sessions[sessionKey]; exists {
+		// 更新最后使用时间
+		session.LastUsed = time.Now()
+		return session
+	}
+
+	// 尝试反向键
+	reverseKey := fmt.Sprintf("%s:%d-%s:%d",
+		packet.DestIP.String(), packet.DestPort,
+		packet.SourceIP.String(), packet.SourcePort)
+
+	if session, exists := h.sessions[reverseKey]; exists {
+		session.LastUsed = time.Now()
+		return session
+	}
+
+	return nil
+}
+
+// saveSessionInfo 保存会话信息
+func (h *HTTPSParser) saveSessionInfo(parsedData *ParsedData, serverName string) {
+	// 从元数据中提取会话信息
+	sessionInfo := &TLSSessionInfo{
+		ServerName: serverName,
+		CreatedAt:  time.Now(),
+		LastUsed:   time.Now(),
+	}
+
+	if sessionID, exists := parsedData.Metadata["session_id"].([]byte); exists {
+		sessionInfo.SessionID = string(sessionID)
+	}
+
+	if clientRandom, exists := parsedData.Metadata["client_random"].([]byte); exists {
+		sessionInfo.ClientRandom = clientRandom
+	}
+
+	if version, exists := parsedData.Metadata["client_version"].(uint16); exists {
+		sessionInfo.Version = version
+	}
+
+	// 生成会话键（这里我们需要从上下文中获取网络信息）
+	// 由于我们在parseClientHello中没有packet信息，我们使用一个通用键
+	sessionKey := fmt.Sprintf("sni_%s", serverName)
+	h.sessions[sessionKey] = sessionInfo
+
+	h.logger.Debug("保存TLS会话信息",
+		"server_name", serverName,
+		"session_key", sessionKey)
 }

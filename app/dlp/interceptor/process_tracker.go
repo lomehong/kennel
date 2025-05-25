@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -48,6 +49,10 @@ const (
 
 	// 错误代码
 	ERROR_INSUFFICIENT_BUFFER = 122
+
+	// 进程快照常量
+	TH32CS_SNAPPROCESS   = 0x00000002
+	INVALID_HANDLE_VALUE = ^uintptr(0)
 )
 
 // TCP连接表项结构
@@ -111,11 +116,12 @@ type TOKEN_PRIVILEGES struct {
 
 // ProcessTracker 进程跟踪器
 type ProcessTracker struct {
-	logger       logging.Logger
-	tcpTable     map[string]uint32 // "ip:port" -> PID
-	udpTable     map[string]uint32 // "ip:port" -> PID
-	processCache map[uint32]*ProcessInfo
-	mu           sync.RWMutex
+	logger          logging.Logger
+	tcpTable        map[string]uint32 // "ip:port" -> PID
+	udpTable        map[string]uint32 // "ip:port" -> PID
+	processCache    map[uint32]*ProcessInfo
+	processSnapshot map[uint32]string // PID -> ProcessName
+	mu              sync.RWMutex
 
 	// Windows API
 	iphlpapi *syscall.LazyDLL
@@ -160,11 +166,12 @@ type ProcessTracker struct {
 // NewProcessTracker 创建进程跟踪器
 func NewProcessTracker(logger logging.Logger) *ProcessTracker {
 	pt := &ProcessTracker{
-		logger:         logger,
-		tcpTable:       make(map[string]uint32),
-		udpTable:       make(map[string]uint32),
-		processCache:   make(map[uint32]*ProcessInfo),
-		stopMonitoring: make(chan bool, 1),
+		logger:          logger,
+		tcpTable:        make(map[string]uint32),
+		udpTable:        make(map[string]uint32),
+		processCache:    make(map[uint32]*ProcessInfo),
+		processSnapshot: make(map[uint32]string),
+		stopMonitoring:  make(chan bool, 1),
 	}
 
 	// 加载Windows API
@@ -300,6 +307,12 @@ func (pt *ProcessTracker) UpdateConnectionTables() error {
 		return err
 	}
 
+	// 更新进程快照
+	if err := pt.updateProcessSnapshot(); err != nil {
+		pt.logger.Warn("更新进程快照失败", "error", err)
+		// 不返回错误，因为连接表更新成功
+	}
+
 	// 更新成功统计
 	pt.updateStats.successUpdates++
 	pt.lastUpdateTime = time.Now()
@@ -433,17 +446,26 @@ func (pt *ProcessTracker) GetProcessByConnection(protocol Protocol, localIP net.
 	// 首先尝试从缓存查找
 	pid := pt.findProcessInCache(protocol, localIP, localPort)
 	if pid != 0 {
+		pt.logger.Debug("从缓存找到进程", "protocol", protocol, "ip", localIP.String(), "port", localPort, "pid", pid)
 		return pid
 	}
 
 	// 如果缓存中没有，强制更新连接表
+	pt.logger.Debug("缓存未命中，更新连接表", "protocol", protocol, "ip", localIP.String(), "port", localPort)
 	if err := pt.UpdateConnectionTables(); err != nil {
 		pt.logger.Error("更新连接表失败", "error", err)
 		return 0
 	}
 
 	// 再次尝试查找
-	return pt.findProcessInCache(protocol, localIP, localPort)
+	pid = pt.findProcessInCache(protocol, localIP, localPort)
+	if pid != 0 {
+		pt.logger.Debug("更新连接表后找到进程", "protocol", protocol, "ip", localIP.String(), "port", localPort, "pid", pid)
+	} else {
+		pt.logger.Debug("更新连接表后仍未找到进程", "protocol", protocol, "ip", localIP.String(), "port", localPort)
+	}
+
+	return pid
 }
 
 // findProcessInCache 在缓存中查找进程
@@ -451,71 +473,110 @@ func (pt *ProcessTracker) findProcessInCache(protocol Protocol, localIP net.IP, 
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 
-	// 策略1：精确匹配 IP:Port
-	key := fmt.Sprintf("%s:%d", localIP.String(), localPort)
-
-	switch protocol {
-	case ProtocolTCP:
-		if pid, exists := pt.tcpTable[key]; exists {
-			pt.logger.Debug("TCP连接精确匹配成功", "key", key, "pid", pid)
-			return pid
-		}
-	case ProtocolUDP:
-		if pid, exists := pt.udpTable[key]; exists {
-			pt.logger.Debug("UDP连接精确匹配成功", "key", key, "pid", pid)
-			return pid
-		}
-	}
-
-	// 策略2：通配符匹配 0.0.0.0:Port（监听所有接口）
-	wildcardKey := fmt.Sprintf("0.0.0.0:%d", localPort)
-
-	switch protocol {
-	case ProtocolTCP:
-		if pid, exists := pt.tcpTable[wildcardKey]; exists {
-			pt.logger.Debug("TCP连接通配符匹配成功", "key", wildcardKey, "pid", pid)
-			return pid
-		}
-	case ProtocolUDP:
-		if pid, exists := pt.udpTable[wildcardKey]; exists {
-			pt.logger.Debug("UDP连接通配符匹配成功", "key", wildcardKey, "pid", pid)
-			return pid
-		}
-	}
-
-	// 策略3：端口匹配（查找使用相同端口的进程）
-	if portPid := pt.findProcessByPort(protocol, localPort); portPid != 0 {
-		pt.logger.Debug("端口匹配成功", "port", localPort, "pid", portPid)
-		return portPid
-	}
-
-	pt.logger.Debug("未找到匹配的进程",
-		"protocol", protocol,
-		"ip", localIP.String(),
-		"port", localPort)
-	return 0
-}
-
-// findProcessByPort 根据端口查找进程
-func (pt *ProcessTracker) findProcessByPort(protocol Protocol, port uint16) uint32 {
 	var table map[string]uint32
+	var protocolName string
 
 	switch protocol {
 	case ProtocolTCP:
 		table = pt.tcpTable
+		protocolName = "TCP"
 	case ProtocolUDP:
 		table = pt.udpTable
+		protocolName = "UDP"
 	default:
+		pt.logger.Debug("不支持的协议", "protocol", protocol)
 		return 0
 	}
 
-	// 遍历连接表，查找使用相同端口的连接
-	for key, pid := range table {
-		if fmt.Sprintf(":%d", port) == key[len(key)-len(fmt.Sprintf(":%d", port)):] {
+	// 策略1：精确匹配 IP:Port
+	key := fmt.Sprintf("%s:%d", localIP.String(), localPort)
+	if pid, exists := table[key]; exists {
+		pt.logger.Debug("精确匹配成功", "protocol", protocolName, "key", key, "pid", pid)
+		return pid
+	}
+
+	// 策略2：通配符匹配 0.0.0.0:Port（监听所有接口）
+	wildcardKey := fmt.Sprintf("0.0.0.0:%d", localPort)
+	if pid, exists := table[wildcardKey]; exists {
+		pt.logger.Debug("通配符匹配成功", "protocol", protocolName, "key", wildcardKey, "pid", pid)
+		return pid
+	}
+
+	// 策略3：本地接口匹配（尝试常见的本地IP）
+	localIPs := []string{
+		"127.0.0.1",
+		"::1",
+	}
+
+	for _, localIPStr := range localIPs {
+		localKey := fmt.Sprintf("%s:%d", localIPStr, localPort)
+		if pid, exists := table[localKey]; exists {
+			pt.logger.Debug("本地接口匹配成功", "protocol", protocolName, "key", localKey, "pid", pid)
 			return pid
 		}
 	}
 
+	// 策略4：端口匹配（查找使用相同端口的进程）
+	if portPid := pt.findProcessByPort(protocol, localPort); portPid != 0 {
+		pt.logger.Debug("端口匹配成功", "protocol", protocolName, "port", localPort, "pid", portPid)
+		return portPid
+	}
+
+	// 策略5：调试输出所有连接表项以帮助诊断
+	pt.logger.Debug("所有匹配策略都失败，输出连接表信息",
+		"protocol", protocolName,
+		"target_ip", localIP.String(),
+		"target_port", localPort,
+		"table_size", len(table))
+
+	// 输出前5个连接表项用于调试
+	count := 0
+	for tableKey, tablePid := range table {
+		if count >= 5 {
+			break
+		}
+		pt.logger.Debug("连接表项", "key", tableKey, "pid", tablePid)
+		count++
+	}
+
+	return 0
+}
+
+// findProcessByPort 根据端口查找进程（增强版本）
+func (pt *ProcessTracker) findProcessByPort(protocol Protocol, port uint16) uint32 {
+	var table map[string]uint32
+	var protocolName string
+
+	switch protocol {
+	case ProtocolTCP:
+		table = pt.tcpTable
+		protocolName = "TCP"
+	case ProtocolUDP:
+		table = pt.udpTable
+		protocolName = "UDP"
+	default:
+		return 0
+	}
+
+	portStr := fmt.Sprintf(":%d", port)
+
+	// 遍历连接表，查找使用相同端口的连接
+	for key, pid := range table {
+		// 检查端口是否匹配（key格式为 "IP:Port"）
+		if strings.HasSuffix(key, portStr) {
+			pt.logger.Debug("端口匹配找到进程",
+				"protocol", protocolName,
+				"port", port,
+				"key", key,
+				"pid", pid)
+			return pid
+		}
+	}
+
+	pt.logger.Debug("端口匹配未找到进程",
+		"protocol", protocolName,
+		"port", port,
+		"table_size", len(table))
 	return 0
 }
 
@@ -583,72 +644,96 @@ func (pt *ProcessTracker) GetProcessInfo(pid uint32) *ProcessInfo {
 	return info
 }
 
-// getProcessDetails 获取进程详细信息（增强版本）
+// getProcessDetails 获取进程详细信息（生产级实现）
 func (pt *ProcessTracker) getProcessDetails(pid uint32) *ProcessInfo {
-	const PROCESS_QUERY_INFORMATION = 0x0400
-	const PROCESS_VM_READ = 0x0010
-	const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+	startTime := time.Now()
 
 	processInfo := &ProcessInfo{
 		PID: int(pid),
 	}
 
-	// 尝试不同的权限级别打开进程句柄
+	pt.logger.Debug("开始获取进程详细信息", "pid", pid)
+
+	// 特殊处理系统进程
+	if pt.isSystemProcess(pid) {
+		processInfo.ProcessName = pt.getSystemProcessName(pid)
+		processInfo.ExecutePath = "System"
+		processInfo.User = "SYSTEM"
+		processInfo.CommandLine = processInfo.ProcessName
+		pt.logger.Debug("系统进程信息获取完成", "pid", pid, "name", processInfo.ProcessName)
+		return processInfo
+	}
+
+	// 策略1：首先尝试从进程快照获取基本信息（权限要求较低）
+	if name := pt.getProcessNameFromSnapshot(pid); name != "" {
+		processInfo.ProcessName = name
+		pt.logger.Debug("从进程快照获取进程名成功", "pid", pid, "name", name)
+	} else {
+		processInfo.ProcessName = "unknown_process"
+		pt.logger.Debug("从进程快照获取进程名失败", "pid", pid)
+	}
+
+	// 策略2：尝试不同的权限级别打开进程句柄获取详细信息
 	handle := pt.openProcessWithFallback(pid)
-	if handle == 0 {
-		pt.logger.Debug("无法打开进程句柄，尝试其他方法", "pid", pid)
-		// 尝试从进程快照获取基本信息
-		if name := pt.getProcessNameFromSnapshot(pid); name != "" {
-			processInfo.ProcessName = name
-			processInfo.ExecutePath = ""
-			processInfo.User = "unknown"
-			processInfo.CommandLine = ""
-			return processInfo
-		}
+	if handle != 0 {
+		defer pt.closeHandle.Call(handle)
+		pt.logger.Debug("成功打开进程句柄", "pid", pid, "handle", handle)
 
-		return &ProcessInfo{
-			PID:         int(pid),
-			ProcessName: "access_denied",
-			ExecutePath: "",
-			User:        "unknown",
-			CommandLine: "",
-		}
-	}
-
-	defer pt.closeHandle.Call(handle)
-
-	// 获取进程可执行文件路径
-	if execPath := pt.getProcessExecutablePath(handle); execPath != "" {
-		processInfo.ExecutePath = execPath
-		processInfo.ProcessName = pt.extractProcessName(execPath)
-	} else {
-		// 如果无法获取路径，尝试从进程快照获取
-		if name := pt.getProcessNameFromSnapshot(pid); name != "" {
-			processInfo.ProcessName = name
+		// 获取进程可执行文件路径
+		if execPath := pt.getProcessExecutablePath(handle); execPath != "" {
+			processInfo.ExecutePath = execPath
+			// 从完整路径中提取进程名
+			if extractedName := pt.extractProcessName(execPath); extractedName != "" {
+				processInfo.ProcessName = extractedName
+			}
+			pt.logger.Debug("获取进程路径成功", "pid", pid, "path", execPath)
 		} else {
-			processInfo.ProcessName = "unknown_process"
+			pt.logger.Debug("获取进程路径失败", "pid", pid)
 		}
-	}
 
-	// 获取用户信息（增强实现）
-	if user := pt.getProcessUserEnhanced(handle); user != "" {
-		processInfo.User = user
+		// 获取用户信息
+		if user := pt.getProcessUserEnhanced(handle); user != "" {
+			processInfo.User = user
+			pt.logger.Debug("获取进程用户成功", "pid", pid, "user", user)
+		} else {
+			processInfo.User = pt.getCurrentUser()
+			pt.logger.Debug("获取进程用户失败，使用当前用户", "pid", pid, "user", processInfo.User)
+		}
 	} else {
-		processInfo.User = "unknown"
+		// 无法打开进程句柄，使用默认值
+		processInfo.User = pt.getCurrentUser()
+		pt.logger.Debug("无法打开进程句柄", "pid", pid)
 	}
 
-	// 获取命令行参数（增强实现）
+	// 策略3：获取命令行参数（尝试多种方法）
 	if cmdline := pt.getProcessCommandLineEnhanced(pid); cmdline != "" {
 		processInfo.CommandLine = cmdline
+		pt.logger.Debug("获取进程命令行成功", "pid", pid, "cmdline", cmdline)
 	} else {
-		processInfo.CommandLine = ""
+		// 使用进程名作为命令行
+		processInfo.CommandLine = processInfo.ProcessName
+		pt.logger.Debug("获取进程命令行失败，使用进程名", "pid", pid)
 	}
 
-	pt.logger.Debug("获取进程详细信息成功",
+	// 确保所有字段都有值
+	if processInfo.ProcessName == "" {
+		processInfo.ProcessName = fmt.Sprintf("process_%d", pid)
+	}
+	if processInfo.User == "" {
+		processInfo.User = "unknown"
+	}
+	if processInfo.CommandLine == "" {
+		processInfo.CommandLine = processInfo.ProcessName
+	}
+
+	processingTime := time.Since(startTime)
+	pt.logger.Debug("获取进程详细信息完成",
 		"pid", pid,
 		"name", processInfo.ProcessName,
 		"path", processInfo.ExecutePath,
-		"user", processInfo.User)
+		"user", processInfo.User,
+		"cmdline", processInfo.CommandLine,
+		"processing_time", processingTime)
 
 	return processInfo
 }
@@ -924,6 +1009,20 @@ func (pt *ProcessTracker) isSystemProcess(pid uint32) bool {
 	return false
 }
 
+// getSystemProcessName 获取系统进程名称
+func (pt *ProcessTracker) getSystemProcessName(pid uint32) string {
+	switch pid {
+	case 0:
+		return "System Idle Process"
+	case 4:
+		return "System"
+	case 8:
+		return "Registry"
+	default:
+		return "System Process"
+	}
+}
+
 // getProcessIntegrityLevel 获取进程完整性级别
 func (pt *ProcessTracker) getProcessIntegrityLevel(handle uintptr) string {
 	// 打开进程令牌
@@ -1076,6 +1175,45 @@ func (pt *ProcessTracker) ClearCache() {
 
 	pt.processCache = make(map[uint32]*ProcessInfo)
 	pt.logger.Debug("进程缓存已清理")
+}
+
+// updateProcessSnapshot 更新进程快照
+func (pt *ProcessTracker) updateProcessSnapshot() error {
+	// 创建进程快照
+	snapshot, _, _ := pt.createToolhelp32Snapshot.Call(TH32CS_SNAPPROCESS, 0)
+	if snapshot == uintptr(INVALID_HANDLE_VALUE) {
+		return fmt.Errorf("创建进程快照失败")
+	}
+	defer pt.closeHandle.Call(snapshot)
+
+	// 初始化进程条目结构
+	var pe32 PROCESSENTRY32
+	pe32.Size = uint32(unsafe.Sizeof(pe32))
+
+	// 获取第一个进程
+	ret, _, _ := pt.process32First.Call(snapshot, uintptr(unsafe.Pointer(&pe32)))
+	if ret == 0 {
+		return fmt.Errorf("获取第一个进程失败")
+	}
+
+	// 清空现有快照缓存
+	pt.processSnapshot = make(map[uint32]string)
+
+	// 遍历所有进程
+	for {
+		// 将进程名从UTF16转换为字符串
+		processName := syscall.UTF16ToString(pe32.ExeFile[:])
+		pt.processSnapshot[pe32.ProcessID] = processName
+
+		// 获取下一个进程
+		ret, _, _ := pt.process32Next.Call(snapshot, uintptr(unsafe.Pointer(&pe32)))
+		if ret == 0 {
+			break
+		}
+	}
+
+	pt.logger.Debug("进程快照更新完成", "process_count", len(pt.processSnapshot))
+	return nil
 }
 
 // intToIP 将32位整数转换为IP地址

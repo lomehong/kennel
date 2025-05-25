@@ -129,3 +129,143 @@ priority:
     - 21                   # FTP
     - 25                   # SMTP
     - 3306                 # MySQL
+
+# OCR（光学字符识别）配置
+ocr:
+  # 是否启用OCR功能
+  enabled: true
+
+  # OCR引擎类型 (tesseract)
+  engine: "tesseract"
+
+  # Tesseract配置
+  tesseract:
+    # 支持的语言包 (eng=英文, chi_sim=简体中文, chi_tra=繁体中文)
+    languages:
+      - "eng"
+      - "chi_sim"
+
+    # 处理超时时间（秒）
+    timeout_seconds: 30
+
+    # 最大图像大小（字节）
+    max_image_size: 10485760  # 10MB
+
+    # 是否启用图像预处理
+    enable_preprocessing: true
+
+    # Tesseract可执行文件路径（可选，留空则使用系统PATH）
+    tesseract_path: ""
+
+    # Tesseract数据目录路径（可选）
+    tessdata_prefix: ""
+
+    # OCR引擎模式
+    # 0 = 仅OCR
+    # 1 = 自动页面分割和OCR
+    # 2 = 自动页面分割，但不进行OCR或OSD
+    # 3 = 完全自动页面分割，但不进行OSD
+    engine_mode: 1
+
+    # 页面分割模式
+    # 0 = 仅方向和脚本检测(OSD)
+    # 1 = 带OSD的自动页面分割
+    # 3 = 完全自动页面分割，但不进行OSD
+    # 6 = 统一的文本块
+    # 7 = 将图像视为单个文本行
+    # 8 = 将图像视为单个单词
+    # 13 = 将图像视为单个字符
+    page_seg_mode: 3
+
+    # 字符白名单（可选，限制识别的字符）
+    char_whitelist: ""
+
+    # 字符黑名单（可选，排除的字符）
+    char_blacklist: ""
+
+# 机器学习配置
+ml:
+  # 是否启用ML功能
+  enabled: true
+
+  # ML模型类型
+  model_type: "simple"
+
+  # 简单模型配置
+  simple_model:
+    # 敏感关键词
+    sensitive_keywords:
+      - "password"
+      - "密码"
+      - "身份证"
+      - "信用卡"
+      - "银行卡"
+      - "secret"
+      - "confidential"
+      - "机密"
+      - "内部"
+      - "token"
+      - "api_key"
+      - "private_key"
+
+    # 置信度阈值
+    confidence_threshold: 0.7
+
+    # 风险评分阈值
+    risk_threshold: 0.5
+
+# 文件类型检测配置
+file_detection:
+  # 是否启用文件类型检测
+  enabled: true
+
+  # 支持的图像格式
+  supported_image_formats:
+    - "image/jpeg"
+    - "image/png"
+    - "image/tiff"
+    - "image/bmp"
+    - "image/gif"
+    - "image/webp"
+
+  # 支持的文档格式
+  supported_document_formats:
+    - "application/pdf"
+    - "application/msword"
+    - "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    - "text/plain"
+    - "text/csv"
+    - "text/html"
+
+# OCR性能配置
+ocr_performance:
+  # 最大并发OCR任务数
+  max_concurrent_ocr: 3
+
+  # OCR任务队列大小
+  ocr_queue_size: 100
+
+  # 缓存配置
+  cache:
+    # 是否启用缓存
+    enabled: true
+
+    # 缓存大小（条目数）
+    max_entries: 1000
+
+    # 缓存TTL（秒）
+    ttl_seconds: 3600
+
+# OCR日志配置
+ocr_logging:
+  # OCR日志级别
+  ocr_log_level: "info"
+
+  # 是否记录OCR处理时间
+  log_processing_time: true
+
+  # 是否记录识别的文本长度
+  log_text_length: true
+
+  # 是否记录错误详情
+  log_error_details: true

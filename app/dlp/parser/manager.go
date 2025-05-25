@@ -105,32 +105,70 @@ func (pm *ProtocolManagerImpl) ParsePacket(packet *interceptor.PacketInfo) (*Par
 
 	// 如果没有找到特定解析器，使用默认解析器
 	if parser == nil {
-		if defaultParser, exists := pm.parsers["unknown"]; exists {
-			parser = defaultParser
-			protocol = "unknown"
-			pm.logger.Debug("使用未知协议解析器", "packet_size", packet.Size)
-		} else if defaultParser, exists := pm.parsers["default"]; exists {
+		// 优先使用"default"协议解析器
+		if defaultParser, exists := pm.parsers["default"]; exists {
 			parser = defaultParser
 			protocol = "default"
-			pm.logger.Debug("使用默认协议解析器", "packet_size", packet.Size)
+			pm.logger.Debug("使用默认协议解析器",
+				"packet_size", packet.Size,
+				"dest_port", packet.DestPort,
+				"source_port", packet.SourcePort)
+		} else if unknownParser, exists := pm.parsers["unknown"]; exists {
+			parser = unknownParser
+			protocol = "unknown"
+			pm.logger.Debug("使用未知协议解析器",
+				"packet_size", packet.Size,
+				"dest_port", packet.DestPort,
+				"source_port", packet.SourcePort)
 		}
 	}
 	pm.mu.RUnlock()
 
+	// 如果仍然没有找到解析器，这是一个严重错误
 	if parser == nil {
 		atomic.AddUint64(&pm.stats.FailedPackets, 1)
-		pm.logger.Error("未找到合适的协议解析器",
+		pm.logger.Error("严重错误：未找到任何协议解析器（包括默认解析器）",
 			"dest_port", packet.DestPort,
 			"source_port", packet.SourcePort,
 			"payload_size", len(packet.Payload),
 			"source_ip", packet.SourceIP.String(),
-			"dest_ip", packet.DestIP.String())
-		return nil, fmt.Errorf("未找到合适的协议解析器")
+			"dest_ip", packet.DestIP.String(),
+			"registered_parsers", pm.GetSupportedProtocols())
+		return nil, fmt.Errorf("严重错误：未找到任何协议解析器（包括默认解析器）")
 	}
 
 	// 解析数据包
 	data, err := parser.Parse(packet)
 	if err != nil {
+		// 如果特定协议解析失败，尝试使用默认解析器
+		if protocol != "default" && protocol != "unknown" {
+			pm.logger.Debug("特定协议解析失败，尝试使用默认解析器",
+				"original_protocol", protocol,
+				"error", err)
+
+			// 尝试使用默认解析器
+			pm.mu.RLock()
+			if defaultParser, exists := pm.parsers["default"]; exists {
+				pm.mu.RUnlock()
+				defaultData, defaultErr := defaultParser.Parse(packet)
+				if defaultErr == nil {
+					atomic.AddUint64(&pm.stats.ParsedPackets, 1)
+					atomic.AddUint64(&pm.stats.BytesProcessed, uint64(packet.Size))
+
+					pm.mu.Lock()
+					pm.stats.ParserStats["default"]++
+					pm.mu.Unlock()
+
+					pm.logger.Debug("默认解析器解析成功",
+						"original_protocol", protocol,
+						"dest_port", packet.DestPort)
+					return defaultData, nil
+				}
+			} else {
+				pm.mu.RUnlock()
+			}
+		}
+
 		atomic.AddUint64(&pm.stats.FailedPackets, 1)
 		pm.stats.LastError = err
 		pm.logger.Error("协议解析失败",

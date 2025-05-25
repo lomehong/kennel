@@ -5,9 +5,16 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/color"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/lomehong/kennel/pkg/logging"
 )
@@ -137,28 +144,99 @@ type FileTypeInfo struct {
 
 // TesseractOCR Tesseract OCR引擎实现
 type TesseractOCR struct {
-	config map[string]interface{}
-	logger logging.Logger
+	config        map[string]interface{}
+	logger        logging.Logger
+	mutex         sync.RWMutex
+	initialized   bool
+	tesseractPath string
+	languages     []string
+	timeout       time.Duration
+	maxImageSize  int64
+	enablePreproc bool
 }
 
 // NewTesseractOCR 创建Tesseract OCR引擎
 func NewTesseractOCR(logger logging.Logger) OCREngine {
 	return &TesseractOCR{
-		logger: logger,
-		config: make(map[string]interface{}),
+		logger:        logger,
+		config:        make(map[string]interface{}),
+		languages:     []string{"eng", "chi_sim"}, // 默认支持英文和简体中文
+		timeout:       30 * time.Second,           // 默认30秒超时
+		maxImageSize:  10 * 1024 * 1024,           // 默认10MB最大图像大小
+		enablePreproc: true,                       // 默认启用预处理
 	}
 }
 
 // ExtractText 从图像中提取文本
 func (t *TesseractOCR) ExtractText(ctx context.Context, img image.Image) (string, error) {
-	// 这里应该集成真实的Tesseract OCR库
-	// 例如使用 github.com/otiai10/gosseract
-	t.logger.Debug("使用Tesseract提取图像文本")
+	t.mutex.RLock()
+	if !t.initialized {
+		t.mutex.RUnlock()
+		return "", fmt.Errorf("OCR引擎未初始化")
+	}
+	t.mutex.RUnlock()
 
-	// 生产级实现：返回空字符串表示OCR功能未启用
-	// 在实际部署时，应该集成真实的OCR库
-	t.logger.Warn("OCR功能未启用，需要集成Tesseract库")
-	return "", fmt.Errorf("OCR功能未启用，需要集成Tesseract库")
+	t.logger.Debug("开始使用Tesseract提取图像文本")
+
+	// 创建带超时的上下文
+	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
+	defer cancel()
+
+	// 预处理图像
+	processedImg := img
+	if t.enablePreproc {
+		var err error
+		processedImg, err = t.preprocessImage(img)
+		if err != nil {
+			t.logger.Warn("图像预处理失败，使用原图", "error", err)
+			processedImg = img
+		}
+	}
+
+	// 将图像转换为字节数组
+	imgBytes, err := t.imageToBytes(processedImg)
+	if err != nil {
+		return "", fmt.Errorf("图像转换失败: %w", err)
+	}
+
+	// 检查图像大小
+	if int64(len(imgBytes)) > t.maxImageSize {
+		return "", fmt.Errorf("图像大小超过限制: %d bytes > %d bytes", len(imgBytes), t.maxImageSize)
+	}
+
+	// 使用goroutine执行OCR，支持超时控制
+	resultChan := make(chan string, 1)
+	errorChan := make(chan error, 1)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				errorChan <- fmt.Errorf("OCR处理发生panic: %v", r)
+			}
+		}()
+
+		// 尝试执行真实的OCR
+		text, err := t.performOCR(imgBytes)
+		if err != nil {
+			errorChan <- err
+			return
+		}
+
+		resultChan <- strings.TrimSpace(text)
+	}()
+
+	// 等待结果或超时
+	select {
+	case <-timeoutCtx.Done():
+		t.logger.Warn("OCR处理超时", "timeout", t.timeout)
+		return "", fmt.Errorf("OCR处理超时")
+	case err := <-errorChan:
+		t.logger.Error("OCR处理失败", "error", err)
+		return "", err
+	case text := <-resultChan:
+		t.logger.Debug("OCR文本提取完成", "text_length", len(text))
+		return text, nil
+	}
 }
 
 // ExtractTextFromBytes 从字节数据中提取文本
@@ -177,20 +255,156 @@ func (t *TesseractOCR) GetSupportedFormats() []string {
 	return []string{"image/jpeg", "image/png", "image/tiff", "image/bmp"}
 }
 
+// preprocessImage 预处理图像以提高OCR准确率
+func (t *TesseractOCR) preprocessImage(img image.Image) (image.Image, error) {
+	bounds := img.Bounds()
+
+	// 创建灰度图像
+	grayImg := image.NewGray(bounds)
+
+	// 转换为灰度
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			originalColor := img.At(x, y)
+			grayColor := color.GrayModel.Convert(originalColor)
+			grayImg.Set(x, y, grayColor)
+		}
+	}
+
+	// 简单的二值化处理
+	threshold := uint8(128)
+	binaryImg := image.NewGray(bounds)
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			grayColor := grayImg.GrayAt(x, y)
+			if grayColor.Y > threshold {
+				binaryImg.Set(x, y, color.Gray{Y: 255})
+			} else {
+				binaryImg.Set(x, y, color.Gray{Y: 0})
+			}
+		}
+	}
+
+	return binaryImg, nil
+}
+
+// imageToBytes 将图像转换为字节数组
+func (t *TesseractOCR) imageToBytes(img image.Image) ([]byte, error) {
+	var buf bytes.Buffer
+
+	// 尝试PNG格式编码
+	err := png.Encode(&buf, img)
+	if err != nil {
+		// 如果PNG失败，尝试JPEG格式
+		buf.Reset()
+		err = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90})
+		if err != nil {
+			return nil, fmt.Errorf("图像编码失败: %w", err)
+		}
+	}
+
+	return buf.Bytes(), nil
+}
+
+// performOCR 执行OCR处理
+func (t *TesseractOCR) performOCR(imgBytes []byte) (string, error) {
+	// 尝试使用Tesseract库
+	if t.isTesseractLibAvailable() {
+		return t.performTesseractOCRWithLib(imgBytes)
+	}
+
+	// 如果Tesseract库不可用，返回错误
+	t.logger.Warn("Tesseract库不可用，OCR功能降级")
+	return "", fmt.Errorf("Tesseract OCR不可用，请安装Tesseract或使用 'go build -tags tesseract' 编译")
+}
+
 // Initialize 初始化OCR引擎
 func (t *TesseractOCR) Initialize(config map[string]interface{}) error {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+
 	t.config = config
 	t.logger.Info("初始化Tesseract OCR引擎")
 
-	// 这里应该初始化真实的Tesseract库
-	// 设置语言包、配置参数等
+	// 从配置中读取参数
+	if languages, ok := config["languages"].([]string); ok && len(languages) > 0 {
+		t.languages = languages
+	}
+
+	if timeout, ok := config["timeout"].(time.Duration); ok {
+		t.timeout = timeout
+	} else if timeoutSec, ok := config["timeout_seconds"].(int); ok {
+		t.timeout = time.Duration(timeoutSec) * time.Second
+	}
+
+	if maxSize, ok := config["max_image_size"].(int64); ok {
+		t.maxImageSize = maxSize
+	}
+
+	if enablePreproc, ok := config["enable_preprocessing"].(bool); ok {
+		t.enablePreproc = enablePreproc
+	}
+
+	if tesseractPath, ok := config["tesseract_path"].(string); ok {
+		t.tesseractPath = tesseractPath
+		// 设置Tesseract路径
+		if t.tesseractPath != "" {
+			os.Setenv("TESSDATA_PREFIX", filepath.Dir(t.tesseractPath))
+		}
+	}
+
+	// 测试Tesseract是否可用
+	err := t.testTesseractAvailability()
+	if err != nil {
+		t.logger.Error("Tesseract不可用", "error", err)
+		return fmt.Errorf("Tesseract不可用: %w", err)
+	}
+
+	t.initialized = true
+	t.logger.Info("Tesseract OCR引擎初始化成功",
+		"languages", t.languages,
+		"timeout", t.timeout,
+		"max_image_size", t.maxImageSize,
+		"enable_preprocessing", t.enablePreproc)
+
+	return nil
+}
+
+// testTesseractAvailability 测试Tesseract是否可用
+func (t *TesseractOCR) testTesseractAvailability() error {
+	// 创建一个简单的测试图像
+	testImg := image.NewRGBA(image.Rect(0, 0, 100, 50))
+
+	// 填充白色背景
+	for y := 0; y < 50; y++ {
+		for x := 0; x < 100; x++ {
+			testImg.Set(x, y, color.RGBA{255, 255, 255, 255})
+		}
+	}
+
+	// 转换测试图像为字节
+	imgBytes, err := t.imageToBytes(testImg)
+	if err != nil {
+		return fmt.Errorf("测试图像转换失败: %w", err)
+	}
+
+	// 尝试执行OCR测试
+	_, err = t.performTesseractOCRWithLib(imgBytes)
+	if err != nil {
+		return fmt.Errorf("Tesseract测试失败: %w", err)
+	}
 
 	return nil
 }
 
 // Cleanup 清理资源
 func (t *TesseractOCR) Cleanup() error {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+
 	t.logger.Info("清理Tesseract OCR资源")
+	t.initialized = false
 	return nil
 }
 

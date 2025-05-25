@@ -9,7 +9,47 @@ import (
 
 	"github.com/lomehong/kennel/pkg/core/plugin"
 	"github.com/lomehong/kennel/pkg/logging"
+	"gopkg.in/yaml.v2"
 )
+
+// loadConfigFromFile 从配置文件加载配置
+func loadConfigFromFile(configPath string) (map[string]interface{}, error) {
+	// 检查配置文件是否存在
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("配置文件不存在: %s", configPath)
+	}
+
+	// 读取配置文件
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取配置文件失败: %w", err)
+	}
+
+	// 解析YAML配置
+	var config map[string]interface{}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("解析配置文件失败: %w", err)
+	}
+
+	return config, nil
+}
+
+// mergeConfigs 合并配置，fileConfig优先级高于defaultConfig
+func mergeConfigs(fileConfig, defaultConfig map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// 先复制默认配置
+	for k, v := range defaultConfig {
+		result[k] = v
+	}
+
+	// 再复制文件配置，覆盖默认配置
+	for k, v := range fileConfig {
+		result[k] = v
+	}
+
+	return result
+}
 
 func main() {
 	// 设置环境变量，确保插件使用正确的 Magic Cookie
@@ -27,9 +67,19 @@ func main() {
 	// 创建数据防泄漏模块
 	module := NewDLPModule(logger.Named("dlp"))
 
-	// 创建默认配置
+	// 尝试从配置文件加载配置
+	configPath := "config.yaml"
+	fileConfig, err := loadConfigFromFile(configPath)
+	if err != nil {
+		logger.Warn("加载配置文件失败，使用默认配置", "error", err, "config_path", configPath)
+		fileConfig = make(map[string]interface{})
+	} else {
+		logger.Info("已加载配置文件", "config_path", configPath)
+	}
+
+	// 创建配置，合并文件配置和默认配置
 	config := &plugin.ModuleConfig{
-		Settings: map[string]interface{}{
+		Settings: mergeConfigs(fileConfig, map[string]interface{}{
 			"log_level":         "info",
 			"monitor_clipboard": true,
 			"monitor_files":     true,
@@ -43,7 +93,7 @@ func main() {
 			"network_protocols": []string{
 				"http", "https", "ftp", "smtp",
 			},
-		},
+		}),
 	}
 
 	// 初始化模块
