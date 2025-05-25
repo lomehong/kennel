@@ -4,17 +4,27 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
+
+// 辅助函数，用于从配置中获取布尔值
+func getConfigBoolFromUSB(config map[string]interface{}, key string, defaultValue bool) bool {
+	if val, ok := config[key]; ok {
+		if b, ok := val.(bool); ok {
+			return b
+		}
+	}
+	return defaultValue
+}
 
 // USBManager USB管理器
 type USBManager struct {
-	logger sdk.Logger
+	logger logging.Logger
 	config map[string]interface{}
 }
 
 // NewUSBManager 创建一个新的USB管理器
-func NewUSBManager(logger sdk.Logger, config map[string]interface{}) *USBManager {
+func NewUSBManager(logger logging.Logger, config map[string]interface{}) *USBManager {
 	// 创建USB管理器
 	manager := &USBManager{
 		logger: logger,
@@ -114,7 +124,7 @@ func (m *USBManager) MonitorUSBDevices() error {
 	m.logger.Info("开始监控USB设备变化")
 
 	// 检查是否启用USB监控
-	if !sdk.GetConfigBool(m.config, "monitor_usb", true) {
+	if !getConfigBoolFromUSB(m.config, "monitor_usb", true) {
 		m.logger.Info("USB设备监控已禁用")
 		return nil
 	}

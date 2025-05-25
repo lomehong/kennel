@@ -9,12 +9,12 @@ import (
 	"strconv"
 	"syscall"
 
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // ProcessKillTool 是进程终止工具
 type ProcessKillTool struct {
-	Logger sdk.Logger
+	Logger logging.Logger
 }
 
 // GetName 返回工具名称
@@ -104,7 +104,7 @@ func (t *ProcessKillTool) Execute(ctx context.Context, params map[string]interfa
 
 // CommandExecuteTool 是命令执行工具
 type CommandExecuteTool struct {
-	Logger sdk.Logger
+	Logger logging.Logger
 }
 
 // GetName 返回工具名称
@@ -191,7 +191,7 @@ func (t *CommandExecuteTool) Execute(ctx context.Context, params map[string]inte
 
 // FileReadTool 是文件读取工具
 type FileReadTool struct {
-	Logger sdk.Logger
+	Logger logging.Logger
 }
 
 // GetName 返回工具名称

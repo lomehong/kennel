@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // ManagerConfig 定义了 MCP 管理器的配置
@@ -25,7 +25,7 @@ type ManagerConfig struct {
 // Manager 实现了 MCP 管理器
 type Manager struct {
 	config    *ManagerConfig
-	logger    sdk.Logger
+	logger    logging.Logger
 	client    *Client
 	mutex     sync.RWMutex
 	tools     map[string]ToolInfo
@@ -33,7 +33,7 @@ type Manager struct {
 }
 
 // NewManager 创建一个新的 MCP 管理器
-func NewManager(config *ManagerConfig, logger sdk.Logger) (*Manager, error) {
+func NewManager(config *ManagerConfig, logger logging.Logger) (*Manager, error) {
 	if config == nil {
 		config = &ManagerConfig{}
 	}

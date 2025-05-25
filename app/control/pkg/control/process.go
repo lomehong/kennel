@@ -5,20 +5,59 @@ import (
 	"strings"
 	"time"
 
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 	"github.com/shirou/gopsutil/v3/process"
 )
 
+// 辅助函数，用于从配置中获取字符串切片
+func getConfigStringSliceFromProcess(config map[string]interface{}, key string) []string {
+	if val, ok := config[key]; ok {
+		if slice, ok := val.([]interface{}); ok {
+			result := make([]string, len(slice))
+			for i, v := range slice {
+				if str, ok := v.(string); ok {
+					result[i] = str
+				}
+			}
+			return result
+		}
+	}
+	return nil
+}
+
+// 辅助函数，用于从配置中获取布尔值
+func getConfigBoolFromProcess(config map[string]interface{}, key string, defaultValue bool) bool {
+	if val, ok := config[key]; ok {
+		if b, ok := val.(bool); ok {
+			return b
+		}
+	}
+	return defaultValue
+}
+
+// 辅助函数，用于从配置中获取整数值
+func getConfigIntFromProcess(config map[string]interface{}, key string, defaultValue int) int {
+	if val, ok := config[key]; ok {
+		if i, ok := val.(int); ok {
+			return i
+		}
+		if f, ok := val.(float64); ok {
+			return int(f)
+		}
+	}
+	return defaultValue
+}
+
 // ProcessManager 进程管理器
 type ProcessManager struct {
-	logger         sdk.Logger
+	logger         logging.Logger
 	config         map[string]interface{}
 	processCache   *ProcessCache
 	protectedProcs map[string]bool
 }
 
 // NewProcessManager 创建一个新的进程管理器
-func NewProcessManager(logger sdk.Logger, config map[string]interface{}) *ProcessManager {
+func NewProcessManager(logger logging.Logger, config map[string]interface{}) *ProcessManager {
 	// 创建进程缓存
 	processCache := NewProcessCache()
 
@@ -39,7 +78,7 @@ func NewProcessManager(logger sdk.Logger, config map[string]interface{}) *Proces
 // initProtectedProcesses 初始化受保护的进程
 func (m *ProcessManager) initProtectedProcesses() {
 	// 获取受保护的进程列表
-	protectedProcs := sdk.GetConfigStringSlice(m.config, "protected_processes")
+	protectedProcs := getConfigStringSliceFromProcess(m.config, "protected_processes")
 	for _, proc := range protectedProcs {
 		m.protectedProcs[strings.ToLower(proc)] = true
 	}
@@ -50,7 +89,7 @@ func (m *ProcessManager) initProtectedProcesses() {
 // GetProcesses 获取进程列表
 func (m *ProcessManager) GetProcesses() ([]ProcessInfo, error) {
 	// 获取缓存过期时间
-	cacheExpiration := time.Duration(sdk.GetConfigInt(m.config, "process_cache_expiration", 10)) * time.Second
+	cacheExpiration := time.Duration(getConfigIntFromProcess(m.config, "process_cache_expiration", 10)) * time.Second
 
 	// 检查缓存是否有效
 	if processes, valid := m.processCache.GetCachedProcesses(cacheExpiration); valid {
@@ -130,7 +169,7 @@ func (m *ProcessManager) KillProcess(pid int) error {
 	m.logger.Info("终止进程", "pid", pid)
 
 	// 检查是否允许终止进程
-	if !sdk.GetConfigBool(m.config, "allow_process_kill", true) {
+	if !getConfigBoolFromProcess(m.config, "allow_process_kill", true) {
 		return fmt.Errorf("不允许终止进程")
 	}
 

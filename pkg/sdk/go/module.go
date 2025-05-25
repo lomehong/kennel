@@ -8,6 +8,7 @@ import (
 
 	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/lomehong/kennel/pkg/core/plugin"
+	"github.com/lomehong/kennel/pkg/logging"
 	pluginLib "github.com/lomehong/kennel/pkg/plugin"
 )
 
@@ -19,19 +20,31 @@ type BaseModule struct {
 	Description string
 	Author      string
 	License     string
-	Logger      Logger
+	Logger      logging.Logger
 	Config      map[string]interface{}
 	StartTime   time.Time
 }
 
 // NewBaseModule 创建基础模块
 func NewBaseModule(id, name, version, description string) *BaseModule {
+	// 创建默认日志记录器
+	logConfig := logging.DefaultLogConfig()
+	logConfig.Level = logging.LogLevelInfo
+	logConfig.Output = logging.LogOutputStdout
+	logger, err := logging.NewEnhancedLogger(logConfig)
+	if err != nil {
+		// 如果创建失败，创建一个基本的日志记录器
+		logConfig.Output = logging.LogOutputStdout
+		logConfig.Format = logging.LogFormatText
+		logger, _ = logging.NewEnhancedLogger(logConfig)
+	}
+
 	return &BaseModule{
 		ID:          id,
 		Name:        name,
 		Version:     version,
 		Description: description,
-		Logger:      NewLogger(id, LogLevelInfo),
+		Logger:      logger.Named(id),
 		Config:      make(map[string]interface{}),
 		StartTime:   time.Now(),
 	}

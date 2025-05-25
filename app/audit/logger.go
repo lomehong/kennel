@@ -6,19 +6,70 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
+
+// 辅助函数，用于从配置中获取字符串值
+func getConfigStringFromAudit(config map[string]interface{}, key, defaultValue string) string {
+	if val, ok := config[key]; ok {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return defaultValue
+}
+
+// 辅助函数，用于从配置中获取布尔值
+func getConfigBoolFromAudit(config map[string]interface{}, key string, defaultValue bool) bool {
+	if val, ok := config[key]; ok {
+		if b, ok := val.(bool); ok {
+			return b
+		}
+	}
+	return defaultValue
+}
+
+// 辅助函数，用于从配置中获取整数值
+func getConfigIntFromAudit(config map[string]interface{}, key string, defaultValue int) int {
+	if val, ok := config[key]; ok {
+		switch v := val.(type) {
+		case int:
+			return v
+		case int64:
+			return int(v)
+		case float64:
+			return int(v)
+		}
+	}
+	return defaultValue
+}
+
+// 辅助函数，用于从配置中获取字符串切片
+func getConfigStringSliceFromAudit(config map[string]interface{}, key string) []string {
+	if val, ok := config[key]; ok {
+		if slice, ok := val.([]interface{}); ok {
+			result := make([]string, len(slice))
+			for i, v := range slice {
+				if str, ok := v.(string); ok {
+					result[i] = str
+				}
+			}
+			return result
+		}
+	}
+	return nil
+}
 
 // AuditLogger 负责记录审计日志
 type AuditLogger struct {
-	logger     sdk.Logger
+	logger     logging.Logger
 	store      *AuditLogStore
 	config     map[string]interface{}
 	fileLogger *os.File
 }
 
 // NewAuditLogger 创建一个新的审计日志记录器
-func NewAuditLogger(logger sdk.Logger, config map[string]interface{}) (*AuditLogger, error) {
+func NewAuditLogger(logger logging.Logger, config map[string]interface{}) (*AuditLogger, error) {
 	// 创建审计日志存储
 	store := NewAuditLogStore()
 
@@ -40,14 +91,14 @@ func NewAuditLogger(logger sdk.Logger, config map[string]interface{}) (*AuditLog
 // initFileLogger 初始化文件日志
 func (l *AuditLogger) initFileLogger() error {
 	// 检查存储类型
-	storageType := sdk.GetConfigString(l.config, "storage.type", "file")
+	storageType := getConfigStringFromAudit(l.config, "storage.type", "file")
 	if storageType != "file" {
 		// 不使用文件存储，直接返回
 		return nil
 	}
 
 	// 获取日志目录
-	logDir := sdk.GetConfigString(l.config, "storage.file.dir", "data/audit/logs")
+	logDir := getConfigStringFromAudit(l.config, "storage.file.dir", "data/audit/logs")
 
 	// 创建日志目录
 	if err := os.MkdirAll(logDir, 0755); err != nil {
@@ -55,7 +106,7 @@ func (l *AuditLogger) initFileLogger() error {
 	}
 
 	// 获取日志文件名格式
-	filenameFormat := sdk.GetConfigString(l.config, "storage.file.filename_format", "audit-%Y-%m-%d.log")
+	filenameFormat := getConfigStringFromAudit(l.config, "storage.file.filename_format", "audit-%Y-%m-%d.log")
 
 	// 替换日期格式
 	now := time.Now()
@@ -121,7 +172,7 @@ func (l *AuditLogger) LogEvent(eventType, user string, details map[string]interf
 // shouldSendAlert 检查是否需要发送警报
 func (l *AuditLogger) shouldSendAlert(eventType string) bool {
 	// 检查是否启用警报
-	enableAlerts := sdk.GetConfigBool(l.config, "enable_alerts", false)
+	enableAlerts := getConfigBoolFromAudit(l.config, "enable_alerts", false)
 	if !enableAlerts {
 		return false
 	}
@@ -133,7 +184,7 @@ func (l *AuditLogger) shouldSendAlert(eventType string) bool {
 // sendAlert 发送警报
 func (l *AuditLogger) sendAlert(log AuditLog) {
 	// 获取警报接收者
-	recipients := sdk.GetConfigStringSlice(l.config, "alert_recipients")
+	recipients := getConfigStringSliceFromAudit(l.config, "alert_recipients")
 	if len(recipients) == 0 {
 		l.logger.Warn("未配置警报接收者，无法发送警报")
 		return
@@ -201,7 +252,7 @@ func (l *AuditLogger) ClearLogs(user string) error {
 // CleanupOldLogs 清理超过保留期的旧日志
 func (l *AuditLogger) CleanupOldLogs() int {
 	// 获取日志保留天数
-	retentionDays := sdk.GetConfigInt(l.config, "log_retention_days", 30)
+	retentionDays := getConfigIntFromAudit(l.config, "log_retention_days", 30)
 	if retentionDays <= 0 {
 		return 0
 	}
@@ -212,8 +263,8 @@ func (l *AuditLogger) CleanupOldLogs() int {
 	// 记录清理事件
 	if removedCount > 0 {
 		l.LogEvent("audit.cleanup", "system", map[string]interface{}{
-			"action":        "cleanup_logs",
-			"removed_count": removedCount,
+			"action":         "cleanup_logs",
+			"removed_count":  removedCount,
 			"retention_days": retentionDays,
 		})
 	}

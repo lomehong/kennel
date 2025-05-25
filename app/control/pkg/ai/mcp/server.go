@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // ServerConfig 定义了 MCP Server 的配置
@@ -27,12 +27,12 @@ type Server struct {
 	router     *mux.Router
 	httpServer *http.Server
 	tools      map[string]Tool
-	logger     sdk.Logger
+	logger     logging.Logger
 	mu         sync.RWMutex
 }
 
 // NewServer 创建一个新的 MCP Server
-func NewServer(config *ServerConfig, logger sdk.Logger) (*Server, error) {
+func NewServer(config *ServerConfig, logger logging.Logger) (*Server, error) {
 	if config == nil {
 		config = &ServerConfig{}
 	}

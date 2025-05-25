@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // ProcessKillToolResult 是进程终止工具的结果
@@ -46,11 +46,11 @@ type ToolExecutor interface {
 
 // ProcessKillToolExecutor 是进程终止工具执行器
 type ProcessKillToolExecutor struct {
-	logger sdk.Logger
+	logger logging.Logger
 }
 
 // NewProcessKillToolExecutor 创建一个新的进程终止工具执行器
-func NewProcessKillToolExecutor(logger sdk.Logger) *ProcessKillToolExecutor {
+func NewProcessKillToolExecutor(logger logging.Logger) *ProcessKillToolExecutor {
 	return &ProcessKillToolExecutor{
 		logger: logger,
 	}
@@ -116,11 +116,11 @@ func (e *ProcessKillToolExecutor) Execute(ctx context.Context, params map[string
 
 // CommandExecuteToolExecutor 是命令执行工具执行器
 type CommandExecuteToolExecutor struct {
-	logger sdk.Logger
+	logger logging.Logger
 }
 
 // NewCommandExecuteToolExecutor 创建一个新的命令执行工具执行器
-func NewCommandExecuteToolExecutor(logger sdk.Logger) *CommandExecuteToolExecutor {
+func NewCommandExecuteToolExecutor(logger logging.Logger) *CommandExecuteToolExecutor {
 	return &CommandExecuteToolExecutor{
 		logger: logger,
 	}
@@ -243,11 +243,11 @@ func (e *CommandExecuteToolExecutor) Execute(ctx context.Context, params map[str
 
 // FileReadToolExecutor 是文件读取工具执行器
 type FileReadToolExecutor struct {
-	logger sdk.Logger
+	logger logging.Logger
 }
 
 // NewFileReadToolExecutor 创建一个新的文件读取工具执行器
-func NewFileReadToolExecutor(logger sdk.Logger) *FileReadToolExecutor {
+func NewFileReadToolExecutor(logger logging.Logger) *FileReadToolExecutor {
 	return &FileReadToolExecutor{
 		logger: logger,
 	}

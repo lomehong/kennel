@@ -10,17 +10,17 @@ import (
 	"time"
 
 	"github.com/lomehong/kennel/app/control/pkg/ai/mcp"
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 	"github.com/shirou/gopsutil/v3/process"
 )
 
 // ProcessListTool 进程列表工具
 type ProcessListTool struct {
-	logger sdk.Logger
+	logger logging.Logger
 }
 
 // NewProcessListTool 创建一个新的进程列表工具
-func NewProcessListTool(logger sdk.Logger) *ProcessListTool {
+func NewProcessListTool(logger logging.Logger) *ProcessListTool {
 	return &ProcessListTool{
 		logger: logger,
 	}
@@ -151,11 +151,11 @@ func (t *ProcessListTool) Run() func(ctx context.Context, argumentsInJSON string
 
 // CommandExecTool 命令执行工具
 type CommandExecTool struct {
-	logger sdk.Logger
+	logger logging.Logger
 }
 
 // NewCommandExecTool 创建一个新的命令执行工具
-func NewCommandExecTool(logger sdk.Logger) *CommandExecTool {
+func NewCommandExecTool(logger logging.Logger) *CommandExecTool {
 	return &CommandExecTool{
 		logger: logger,
 	}
@@ -307,11 +307,11 @@ func (t *CommandExecTool) Run() func(ctx context.Context, argumentsInJSON string
 
 // ProcessKillTool 进程终止工具
 type ProcessKillTool struct {
-	logger sdk.Logger
+	logger logging.Logger
 }
 
 // NewProcessKillTool 创建一个新的进程终止工具
-func NewProcessKillTool(logger sdk.Logger) *ProcessKillTool {
+func NewProcessKillTool(logger logging.Logger) *ProcessKillTool {
 	return &ProcessKillTool{
 		logger: logger,
 	}

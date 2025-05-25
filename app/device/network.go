@@ -5,22 +5,48 @@ import (
 	"net"
 	"strings"
 
-	"github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
+
+// 辅助函数，用于从配置中获取字符串切片
+func getConfigStringSliceFromNetwork(config map[string]interface{}, key string) []string {
+	if val, ok := config[key]; ok {
+		if slice, ok := val.([]interface{}); ok {
+			result := make([]string, len(slice))
+			for i, v := range slice {
+				if str, ok := v.(string); ok {
+					result[i] = str
+				}
+			}
+			return result
+		}
+	}
+	return nil
+}
+
+// 辅助函数，用于从配置中获取布尔值
+func getConfigBoolFromNetwork(config map[string]interface{}, key string, defaultValue bool) bool {
+	if val, ok := config[key]; ok {
+		if b, ok := val.(bool); ok {
+			return b
+		}
+	}
+	return defaultValue
+}
 
 // NetworkManager 网络管理器
 type NetworkManager struct {
-	logger             sdk.Logger
-	config             map[string]interface{}
+	logger              logging.Logger
+	config              map[string]interface{}
 	protectedInterfaces map[string]bool
 }
 
 // NewNetworkManager 创建一个新的网络管理器
-func NewNetworkManager(logger sdk.Logger, config map[string]interface{}) *NetworkManager {
+func NewNetworkManager(logger logging.Logger, config map[string]interface{}) *NetworkManager {
 	// 创建网络管理器
 	manager := &NetworkManager{
-		logger:             logger,
-		config:             config,
+		logger:              logger,
+		config:              config,
 		protectedInterfaces: make(map[string]bool),
 	}
 
@@ -33,7 +59,7 @@ func NewNetworkManager(logger sdk.Logger, config map[string]interface{}) *Networ
 // initProtectedInterfaces 初始化受保护的网络接口
 func (m *NetworkManager) initProtectedInterfaces() {
 	// 获取受保护的网络接口列表
-	protectedInterfaces := sdk.GetConfigStringSlice(m.config, "protected_interfaces")
+	protectedInterfaces := getConfigStringSliceFromNetwork(m.config, "protected_interfaces")
 	for _, iface := range protectedInterfaces {
 		m.protectedInterfaces[strings.ToLower(iface)] = true
 	}
@@ -97,7 +123,7 @@ func (m *NetworkManager) EnableNetworkInterface(name string) error {
 	m.logger.Info("启用网络接口", "interface", name)
 
 	// 检查是否允许禁用网络接口
-	if !sdk.GetConfigBool(m.config, "allow_network_disable", true) {
+	if !getConfigBoolFromNetwork(m.config, "allow_network_disable", true) {
 		return fmt.Errorf("不允许修改网络接口状态")
 	}
 
@@ -113,7 +139,7 @@ func (m *NetworkManager) DisableNetworkInterface(name string) error {
 	m.logger.Info("禁用网络接口", "interface", name)
 
 	// 检查是否允许禁用网络接口
-	if !sdk.GetConfigBool(m.config, "allow_network_disable", true) {
+	if !getConfigBoolFromNetwork(m.config, "allow_network_disable", true) {
 		return fmt.Errorf("不允许修改网络接口状态")
 	}
 

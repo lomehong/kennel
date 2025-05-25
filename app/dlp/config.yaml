@@ -1,48 +1,130 @@
-# 数据防泄漏插件配置
-enabled: true
+# DLP模块性能优化配置
+name: "dlp"
+version: "2.0.0"
+description: "数据防泄漏插件 - 性能优化版本"
 
-# 是否启用剪贴板监控
-monitor_clipboard: false
+# 基础功能开关
+monitor_network: true
+monitor_files: true
+monitor_clipboard: true
 
-# 是否启用文件监控
-monitor_files: false
+# 性能优化配置
+max_concurrency: 4        # 最大并发处理数（减少CPU占用）
+buffer_size: 500          # 缓冲区大小（减少内存占用）
 
-# 监控的文件类型
-monitored_file_types:
-  - "*.doc"
-  - "*.docx"
-  - "*.xls"
-  - "*.xlsx"
-  - "*.pdf"
-  - "*.txt"
+# 网络监控配置
+network_protocols:
+  - "http"
+  - "https"
+  - "ftp"
+  - "smtp"
 
-# 监控的目录
+# 拦截器性能配置
+interceptor_config:
+  # 优化过滤器：只拦截特定端口的出站流量
+  filter: "outbound and (tcp.DstPort == 80 or tcp.DstPort == 443 or tcp.DstPort == 21 or tcp.DstPort == 25 or tcp.DstPort == 3306)"
+  buffer_size: 32768       # 32KB缓冲区
+  channel_size: 500        # 通道大小
+  priority: 0
+  flags: 1                 # WINDIVERT_FLAG_SNIFF - 嗅探模式，不阻断流量
+  queue_len: 4096          # WinDivert队列长度
+  queue_time: 1000         # WinDivert队列时间(ms)
+  worker_count: 2          # 工作协程数
+  cache_size: 500          # 进程缓存大小
+  interface: "en0"
+  # 绕过本地和私有网络流量
+  bypass_cidr: "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+  proxy_port: 8080
+  mode: 0                  # 0=监控模式, 1=拦截并允许, 2=拦截并阻断
+  auto_reinject: true      # 自动重新注入数据包
+
+# 白名单配置
+whitelist:
+  enable: true             # 启用白名单
+  processes:               # 进程白名单
+    - "opera.exe"
+    - "dlp.exe"
+  domains:                 # 域名白名单
+    - "*.google.com"
+    - "*.microsoft.com"
+    - "*.github.com"
+    - "*.stackoverflow.com"
+    - "localhost"
+    - "127.0.0.1"
+  ips:                     # IP白名单
+    - "127.0.0.0/8"        # 本地回环
+    - "10.0.0.0/8"         # 私有网络A类
+    - "172.16.0.0/12"      # 私有网络B类
+    - "192.168.0.0/16"     # 私有网络C类
+    - "169.254.0.0/16"     # 链路本地地址
+
+# 解析器配置
+parser_config:
+  max_parsers: 6           # 最大解析器数量
+  timeout: 5000            # 解析超时时间(ms)
+
+# 分析器配置
+analyzer_config:
+  max_analyzers: 3         # 最大分析器数量
+  timeout: 3000            # 分析超时时间(ms)
+
+# 策略引擎配置
+engine_config:
+  max_rules: 100           # 最大规则数量
+  evaluation_timeout: 2000 # 策略评估超时时间(ms)
+
+# 执行器配置
+executor_config:
+  max_executors: 5         # 最大执行器数量
+  action_timeout: 1000     # 动作执行超时时间(ms)
+
+# 文件监控配置
 monitored_directories:
-  - "C:/Users/*/Documents"
-  - "C:/Users/*/Desktop"
+  - "C:\\Users\\%USERNAME%\\Documents"
+  - "C:\\Users\\%USERNAME%\\Desktop"
+  - "C:\\Users\\%USERNAME%\\Downloads"
 
-# 日志级别
-log_level: "info"
+monitored_file_types:
+  - ".txt"
+  - ".doc"
+  - ".docx"
+  - ".pdf"
+  - ".xls"
+  - ".xlsx"
 
-# 规则配置
-rules:
-  - id: "credit-card"
-    name: "信用卡号"
-    description: "检测信用卡号"
-    pattern: "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|6(?:011|5[0-9]{2})[0-9]{12}|(?:2131|1800|35\\d{3})\\d{11})\\b"
-    action: "alert"
-    enabled: true
-  
-  - id: "email"
-    name: "电子邮件地址"
-    description: "检测电子邮件地址"
-    pattern: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b"
-    action: "alert"
-    enabled: true
-  
-  - id: "ip-address"
-    name: "IP地址"
-    description: "检测IP地址"
-    pattern: "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b"
-    action: "alert"
-    enabled: true
+# 日志配置
+logging:
+  level: "info"            # 减少日志级别，提高性能
+  format: "json"
+  output: "stdout"
+
+# 性能监控配置
+performance:
+  enable_metrics: true     # 启用性能指标
+  stats_interval: 300      # 统计间隔(秒)
+  memory_limit: 512        # 内存限制(MB)
+  cpu_limit: 50            # CPU使用率限制(%)
+
+# 自适应性能调整
+adaptive:
+  enable: true             # 启用自适应调整
+  check_interval: 60       # 检查间隔(秒)
+  cpu_threshold: 80        # CPU阈值(%)
+  memory_threshold: 80     # 内存阈值(%)
+
+# 流量限制配置
+traffic_limit:
+  enable: true             # 启用流量限制
+  max_packets_per_second: 1000  # 每秒最大数据包数
+  max_bytes_per_second: 10485760  # 每秒最大字节数(10MB)
+  burst_size: 100          # 突发大小
+
+# 优先级配置
+priority:
+  high_priority_ports:     # 高优先级端口
+    - 443                  # HTTPS
+    - 80                   # HTTP
+  low_priority_ports:      # 低优先级端口
+    - 21                   # FTP
+    - 25                   # SMTP
+    - 3306                 # MySQL

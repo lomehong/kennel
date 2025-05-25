@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
@@ -14,11 +14,11 @@ import (
 
 // Collector 负责收集资产信息
 type Collector struct {
-	logger sdk.Logger
+	logger logging.Logger
 }
 
 // NewCollector 创建一个新的收集器
-func NewCollector(logger sdk.Logger) *Collector {
+func NewCollector(logger logging.Logger) *Collector {
 	return &Collector{
 		logger: logger,
 	}

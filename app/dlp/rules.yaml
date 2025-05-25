@@ -1,0 +1,56 @@
+rules:
+  - id: "credit_card"
+    name: "信用卡号检测"
+    description: "检测信用卡号码"
+    pattern: '\b(?:\d{4}[-\s]?){3}\d{4}\b'
+    action: "block"
+    enabled: true
+    
+  - id: "ssn"
+    name: "社会保障号检测"
+    description: "检测社会保障号码"
+    pattern: '\b\d{3}-\d{2}-\d{4}\b'
+    action: "alert"
+    enabled: true
+    
+  - id: "email"
+    name: "邮箱地址检测"
+    description: "检测邮箱地址"
+    pattern: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    action: "audit"
+    enabled: true
+    
+  - id: "phone"
+    name: "电话号码检测"
+    description: "检测电话号码"
+    pattern: '\b(?:\+86[-\s]?)?(?:1[3-9]\d{9}|\d{3,4}[-\s]?\d{7,8})\b'
+    action: "alert"
+    enabled: true
+    
+  - id: "id_card"
+    name: "身份证号检测"
+    description: "检测身份证号码"
+    pattern: '\b[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b'
+    action: "block"
+    enabled: true
+    
+  - id: "bank_account"
+    name: "银行账号检测"
+    description: "检测银行账号"
+    pattern: '\b\d{16,19}\b'
+    action: "alert"
+    enabled: true
+    
+  - id: "password"
+    name: "密码检测"
+    description: "检测可能的密码字段"
+    pattern: '(?i)(?:password|pwd|pass|secret|key)[:=]\s*[^\s]+'
+    action: "audit"
+    enabled: true
+    
+  - id: "api_key"
+    name: "API密钥检测"
+    description: "检测API密钥"
+    pattern: '(?i)(?:api[_-]?key|access[_-]?token|secret[_-]?key)[:=]\s*[a-zA-Z0-9_-]{20,}'
+    action: "block"
+    enabled: true

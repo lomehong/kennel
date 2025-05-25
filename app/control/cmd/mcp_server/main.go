@@ -12,7 +12,7 @@ import (
 
 	"github.com/lomehong/kennel/app/control/pkg/ai"
 	"github.com/lomehong/kennel/app/control/pkg/ai/mcp"
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 func main() {
@@ -23,7 +23,14 @@ func main() {
 	flag.Parse()
 
 	// 创建日志记录器
-	logger := sdk.NewLogger("mcp-server", getLogLevel(*logLevel))
+	logConfig := logging.DefaultLogConfig()
+	logConfig.Level = getLogLevel(*logLevel)
+	baseLogger, err := logging.NewEnhancedLogger(logConfig)
+	if err != nil {
+		fmt.Printf("创建日志记录器失败: %v\n", err)
+		os.Exit(1)
+	}
+	logger := baseLogger.Named("mcp-server")
 	logger.Info("初始化 MCP Server", "addr", *addr)
 
 	// 创建服务器配置
@@ -69,7 +76,7 @@ func main() {
 }
 
 // 注册工具
-func registerTools(server *mcp.Server, logger sdk.Logger) {
+func registerTools(server *mcp.Server, logger logging.Logger) {
 	// 创建进程列表工具
 	processListTool := &mcp.BaseTool{
 		Name:        "get_processes",
@@ -269,17 +276,17 @@ func registerTools(server *mcp.Server, logger sdk.Logger) {
 }
 
 // 获取日志级别
-func getLogLevel(level string) sdk.LogLevel {
+func getLogLevel(level string) logging.LogLevel {
 	switch level {
 	case "debug":
-		return sdk.LogLevelDebug
+		return logging.LogLevelDebug
 	case "info":
-		return sdk.LogLevelInfo
+		return logging.LogLevelInfo
 	case "warn":
-		return sdk.LogLevelWarn
+		return logging.LogLevelWarn
 	case "error":
-		return sdk.LogLevelError
+		return logging.LogLevelError
 	default:
-		return sdk.LogLevelInfo
+		return logging.LogLevelInfo
 	}
 }

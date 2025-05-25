@@ -14,9 +14,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/hashicorp/go-hclog"
 	"github.com/lomehong/kennel/pkg/comm"
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 var (
@@ -165,11 +164,25 @@ func runServer() {
 // 客户端模式
 func runClient() {
 	// 创建日志器
-	level := hclog.LevelFromString(*logLevel)
-	if level == hclog.NoLevel {
-		level = hclog.Info
+	logConfig := logging.DefaultLogConfig()
+	switch *logLevel {
+	case "debug":
+		logConfig.Level = logging.LogLevelDebug
+	case "info":
+		logConfig.Level = logging.LogLevelInfo
+	case "warn":
+		logConfig.Level = logging.LogLevelWarn
+	case "error":
+		logConfig.Level = logging.LogLevelError
+	default:
+		logConfig.Level = logging.LogLevelInfo
 	}
-	log := logger.NewLogger("comm-tester", level)
+	baseLogger, err := logging.NewEnhancedLogger(logConfig)
+	if err != nil {
+		fmt.Printf("创建日志记录器失败: %v\n", err)
+		os.Exit(1)
+	}
+	log := baseLogger.Named("comm-tester")
 
 	// 创建配置
 	config := comm.DefaultConfig()
@@ -210,8 +223,7 @@ func runClient() {
 
 	// 连接到服务器
 	fmt.Printf("连接到服务器 %s...\n", config.ServerURL)
-	err := manager.Connect()
-	if err != nil {
+	if err := manager.Connect(); err != nil {
 		log.Error("连接服务器失败", "error", err)
 		os.Exit(1)
 	}

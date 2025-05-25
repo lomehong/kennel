@@ -3,28 +3,80 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
+	"github.com/lomehong/kennel/app/dlp/analyzer"
+	"github.com/lomehong/kennel/app/dlp/engine"
+	"github.com/lomehong/kennel/app/dlp/executor"
+	"github.com/lomehong/kennel/app/dlp/interceptor"
+	"github.com/lomehong/kennel/app/dlp/parser"
 	"github.com/lomehong/kennel/pkg/core/plugin"
+	"github.com/lomehong/kennel/pkg/logging"
 	sdk "github.com/lomehong/kennel/pkg/sdk/go"
 )
 
 // DLPModule 实现了数据防泄漏模块
 type DLPModule struct {
 	*sdk.BaseModule
+
+	// 日志记录器
+	Logger logging.Logger
+
+	// 传统组件（保持兼容性）
 	ruleManager   *RuleManager
 	alertManager  *AlertManager
 	scanner       *Scanner
 	monitorCtx    context.Context
 	monitorCancel context.CancelFunc
+
+	// 新的DLP核心组件
+	interceptorManager interceptor.InterceptorManager
+	protocolManager    parser.ProtocolManager
+	analysisManager    analyzer.AnalysisManager
+	policyEngine       engine.PolicyEngine
+	executionManager   executor.ExecutionManager
+
+	// 配置和状态
+	dlpConfig    *DLPConfig
+	running      bool
+	mu           sync.RWMutex
+	processingCh chan *ProcessingTask
+	stopCh       chan struct{}
+}
+
+// DLPConfig DLP模块配置
+type DLPConfig struct {
+	EnableNetworkMonitoring   bool                          `yaml:"enable_network_monitoring" json:"enable_network_monitoring"`
+	EnableFileMonitoring      bool                          `yaml:"enable_file_monitoring" json:"enable_file_monitoring"`
+	EnableClipboardMonitoring bool                          `yaml:"enable_clipboard_monitoring" json:"enable_clipboard_monitoring"`
+	MonitoredDirectories      []string                      `yaml:"monitored_directories" json:"monitored_directories"`
+	MonitoredFileTypes        []string                      `yaml:"monitored_file_types" json:"monitored_file_types"`
+	NetworkProtocols          []string                      `yaml:"network_protocols" json:"network_protocols"`
+	InterceptorConfig         interceptor.InterceptorConfig `yaml:"interceptor_config" json:"interceptor_config"`
+	ParserConfig              parser.ParserConfig           `yaml:"parser_config" json:"parser_config"`
+	AnalyzerConfig            analyzer.AnalyzerConfig       `yaml:"analyzer_config" json:"analyzer_config"`
+	EngineConfig              engine.PolicyEngineConfig     `yaml:"engine_config" json:"engine_config"`
+	ExecutorConfig            executor.ExecutorConfig       `yaml:"executor_config" json:"executor_config"`
+	MaxConcurrency            int                           `yaml:"max_concurrency" json:"max_concurrency"`
+	BufferSize                int                           `yaml:"buffer_size" json:"buffer_size"`
+}
+
+// ProcessingTask 处理任务
+type ProcessingTask struct {
+	ID        string
+	Timestamp time.Time
+	Packet    *interceptor.PacketInfo
+	Context   context.Context
 }
 
 // NewDLPModule 创建一个新的数据防泄漏模块
-func NewDLPModule() *DLPModule {
+func NewDLPModule(logger logging.Logger) *DLPModule {
 	// 创建基础模块
 	base := sdk.NewBaseModule(
 		"dlp",
 		"数据防泄漏插件",
-		"1.0.0",
+		"2.0.0",
 		"数据防泄漏模块，用于检测和防止敏感数据泄漏",
 	)
 
@@ -36,6 +88,13 @@ func NewDLPModule() *DLPModule {
 		BaseModule:    base,
 		monitorCtx:    ctx,
 		monitorCancel: cancel,
+		processingCh:  make(chan *ProcessingTask, 200), // 减少处理通道大小
+		stopCh:        make(chan struct{}),
+	}
+
+	// 设置日志记录器
+	if logger != nil {
+		module.Logger = logger
 	}
 
 	return module
@@ -48,11 +107,124 @@ func (m *DLPModule) Init(ctx context.Context, config *plugin.ModuleConfig) error
 		return err
 	}
 
-	m.Logger.Info("初始化数据防泄漏模块")
+	m.Logger.Info("初始化数据防泄漏模块v2.0")
 
-	// 设置日志级别
-	logLevel := sdk.GetConfigString(m.Config, "log_level", "info")
-	m.Logger.Debug("设置日志级别", "level", logLevel)
+	// 解析DLP配置
+	if err := m.parseDLPConfig(config); err != nil {
+		return fmt.Errorf("解析DLP配置失败: %w", err)
+	}
+
+	// 初始化核心组件
+	if err := m.initializeCoreComponents(); err != nil {
+		return fmt.Errorf("初始化核心组件失败: %w", err)
+	}
+
+	// 初始化传统组件（保持兼容性）
+	if err := m.initializeLegacyComponents(); err != nil {
+		m.Logger.Warn("初始化传统组件失败", "error", err)
+		// 不返回错误，允许新架构独立运行
+	}
+
+	m.Logger.Info("数据防泄漏模块初始化完成")
+	return nil
+}
+
+// parseDLPConfig 解析DLP配置
+func (m *DLPModule) parseDLPConfig(config *plugin.ModuleConfig) error {
+	// 获取字符串切片的辅助函数
+	getStringSlice := func(key string, defaultValue []string) []string {
+		if val, ok := config.Settings[key]; ok {
+			if slice, ok := val.([]interface{}); ok {
+				result := make([]string, len(slice))
+				for i, v := range slice {
+					if str, ok := v.(string); ok {
+						result[i] = str
+					}
+				}
+				return result
+			}
+		}
+		return defaultValue
+	}
+
+	m.dlpConfig = &DLPConfig{
+		EnableNetworkMonitoring:   sdk.GetConfigBool(config.Settings, "monitor_network", true),
+		EnableFileMonitoring:      sdk.GetConfigBool(config.Settings, "monitor_files", true),
+		EnableClipboardMonitoring: sdk.GetConfigBool(config.Settings, "monitor_clipboard", true),
+		MonitoredDirectories:      getStringSlice("monitored_directories", []string{}),
+		MonitoredFileTypes:        getStringSlice("monitored_file_types", []string{}),
+		NetworkProtocols:          getStringSlice("network_protocols", []string{"http", "https", "ftp", "smtp"}),
+		MaxConcurrency:            sdk.GetConfigInt(config.Settings, "max_concurrency", 4), // 减少并发数
+		BufferSize:                sdk.GetConfigInt(config.Settings, "buffer_size", 500),   // 减少缓冲区大小
+	}
+
+	// 创建增强日志记录器用于子组件
+	logConfig := logging.DefaultLogConfig()
+	logConfig.Level = logging.LogLevelInfo
+	enhancedLogger, err := logging.NewEnhancedLogger(logConfig)
+	if err != nil {
+		return fmt.Errorf("创建增强日志记录器失败: %w", err)
+	}
+
+	// 设置子组件配置
+	m.dlpConfig.InterceptorConfig = interceptor.DefaultInterceptorConfig()
+	m.dlpConfig.InterceptorConfig.Logger = enhancedLogger.Named("interceptor")
+
+	m.dlpConfig.ParserConfig = parser.DefaultParserConfig()
+	m.dlpConfig.ParserConfig.Logger = enhancedLogger.Named("parser")
+
+	m.dlpConfig.AnalyzerConfig = analyzer.DefaultAnalyzerConfig()
+	m.dlpConfig.AnalyzerConfig.Logger = enhancedLogger.Named("analyzer")
+
+	m.dlpConfig.EngineConfig = engine.DefaultPolicyEngineConfig()
+	m.dlpConfig.EngineConfig.Logger = enhancedLogger.Named("engine")
+
+	m.dlpConfig.ExecutorConfig = executor.DefaultExecutorConfig()
+	m.dlpConfig.ExecutorConfig.Logger = enhancedLogger.Named("executor")
+
+	return nil
+}
+
+// initializeCoreComponents 初始化核心组件
+func (m *DLPModule) initializeCoreComponents() error {
+	m.Logger.Info("初始化DLP核心组件")
+
+	// 使用配置中的日志记录器
+	logger := m.dlpConfig.InterceptorConfig.Logger
+
+	// 创建拦截器管理器
+	m.interceptorManager = interceptor.NewInterceptorManager(logger)
+
+	// 创建协议解析管理器
+	m.protocolManager = parser.NewProtocolManager(m.dlpConfig.ParserConfig.Logger, m.dlpConfig.ParserConfig)
+
+	// 创建内容分析管理器
+	m.analysisManager = analyzer.NewAnalysisManager(m.dlpConfig.AnalyzerConfig.Logger, m.dlpConfig.AnalyzerConfig)
+
+	// 创建策略引擎
+	m.policyEngine = engine.NewPolicyEngine(m.dlpConfig.EngineConfig.Logger, m.dlpConfig.EngineConfig)
+
+	// 创建执行管理器
+	m.executionManager = executor.NewExecutionManager(m.dlpConfig.ExecutorConfig.Logger, m.dlpConfig.ExecutorConfig)
+
+	// 注册协议解析器
+	if err := m.registerProtocolParsers(); err != nil {
+		return fmt.Errorf("注册协议解析器失败: %w", err)
+	}
+
+	// 注册内容分析器
+	textAnalyzer := analyzer.NewTextAnalyzer(m.dlpConfig.AnalyzerConfig.Logger)
+	if err := m.analysisManager.RegisterAnalyzer(textAnalyzer); err != nil {
+		return fmt.Errorf("注册文本分析器失败: %w", err)
+	}
+
+	m.Logger.Info("DLP核心组件初始化完成")
+	return nil
+}
+
+// initializeLegacyComponents 初始化传统组件
+func (m *DLPModule) initializeLegacyComponents() error {
+	m.Logger.Info("初始化传统组件")
 
 	// 创建规则管理器
 	m.ruleManager = NewRuleManager(m.Logger)
@@ -69,12 +241,101 @@ func (m *DLPModule) Init(ctx context.Context, config *plugin.ModuleConfig) error
 		return fmt.Errorf("加载规则失败: %w", err)
 	}
 
+	m.Logger.Info("传统组件初始化完成")
 	return nil
 }
 
 // Start 启动模块
 func (m *DLPModule) Start() error {
-	m.Logger.Info("启动数据防泄漏模块")
+	m.Logger.Info("启动数据防泄漏模块v2.0")
+
+	// 启动核心组件
+	if err := m.startCoreComponents(); err != nil {
+		return fmt.Errorf("启动核心组件失败: %w", err)
+	}
+
+	// 启动传统组件（保持兼容性）
+	if err := m.startLegacyComponents(); err != nil {
+		m.Logger.Warn("启动传统组件失败", "error", err)
+		// 不返回错误，允许新架构独立运行
+	}
+
+	// 启动数据处理流水线
+	if err := m.startProcessingPipeline(); err != nil {
+		return fmt.Errorf("启动处理流水线失败: %w", err)
+	}
+
+	m.mu.Lock()
+	m.running = true
+	m.mu.Unlock()
+
+	m.Logger.Info("数据防泄漏模块启动完成")
+	return nil
+}
+
+// startCoreComponents 启动核心组件
+func (m *DLPModule) startCoreComponents() error {
+	m.Logger.Info("启动DLP核心组件")
+
+	// 检查核心组件是否已初始化
+	if m.protocolManager == nil || m.analysisManager == nil ||
+		m.policyEngine == nil || m.executionManager == nil {
+		m.Logger.Warn("核心组件未初始化，跳过启动")
+		return nil
+	}
+
+	// 启动协议解析管理器
+	if err := m.protocolManager.Start(); err != nil {
+		return fmt.Errorf("启动协议解析管理器失败: %w", err)
+	}
+
+	// 启动内容分析管理器
+	if err := m.analysisManager.Start(); err != nil {
+		return fmt.Errorf("启动内容分析管理器失败: %w", err)
+	}
+
+	// 启动策略引擎
+	if err := m.policyEngine.Start(); err != nil {
+		return fmt.Errorf("启动策略引擎失败: %w", err)
+	}
+
+	// 启动执行管理器
+	if err := m.executionManager.Start(); err != nil {
+		return fmt.Errorf("启动执行管理器失败: %w", err)
+	}
+
+	// 如果启用网络监控，启动拦截器管理器
+	if m.dlpConfig != nil && m.dlpConfig.EnableNetworkMonitoring && m.interceptorManager != nil {
+		// 创建并注册流量拦截器
+		trafficInterceptor, err := interceptor.NewTrafficInterceptor(m.dlpConfig.InterceptorConfig.Logger)
+		if err != nil {
+			m.Logger.Warn("创建流量拦截器失败", "error", err)
+		} else {
+			// 初始化拦截器配置
+			if err := trafficInterceptor.Initialize(m.dlpConfig.InterceptorConfig); err != nil {
+				m.Logger.Warn("初始化流量拦截器失败", "error", err)
+			} else {
+				if err := m.interceptorManager.RegisterInterceptor("traffic", trafficInterceptor); err != nil {
+					m.Logger.Warn("注册流量拦截器失败，网络监控功能将被禁用", "error", err)
+				} else {
+					if err := m.interceptorManager.StartAll(); err != nil {
+						m.Logger.Warn("启动拦截器失败，网络监控功能将被禁用", "error", err)
+						m.Logger.Info("DLP系统将继续运行其他功能：文件监控、剪贴板监控等")
+					} else {
+						m.Logger.Info("网络流量拦截器启动成功")
+					}
+				}
+			}
+		}
+	}
+
+	m.Logger.Info("DLP核心组件启动完成")
+	return nil
+}
+
+// startLegacyComponents 启动传统组件
+func (m *DLPModule) startLegacyComponents() error {
+	m.Logger.Info("启动传统组件")
 
 	// 确保规则管理器已初始化
 	if m.ruleManager == nil {
@@ -106,21 +367,226 @@ func (m *DLPModule) Start() error {
 	}
 
 	// 启动剪贴板监控
-	if err := m.scanner.MonitorClipboard(); err != nil {
-		m.Logger.Error("启动剪贴板监控失败", "error", err)
+	if m.scanner != nil {
+		if err := m.scanner.MonitorClipboard(); err != nil {
+			m.Logger.Error("启动剪贴板监控失败", "error", err)
+		}
+
+		// 启动文件监控
+		if err := m.scanner.MonitorFiles(); err != nil {
+			m.Logger.Error("启动文件监控失败", "error", err)
+		}
 	}
 
-	// 启动文件监控
-	if err := m.scanner.MonitorFiles(); err != nil {
-		m.Logger.Error("启动文件监控失败", "error", err)
+	m.Logger.Info("传统组件启动完成")
+	return nil
+}
+
+// startProcessingPipeline 启动处理流水线
+func (m *DLPModule) startProcessingPipeline() error {
+	m.Logger.Info("启动数据处理流水线")
+
+	// 启动处理工作协程
+	if m.dlpConfig != nil {
+		for i := 0; i < m.dlpConfig.MaxConcurrency; i++ {
+			go m.processingWorker(i)
+		}
+
+		// 如果启用网络监控，启动数据包监听
+		if m.dlpConfig.EnableNetworkMonitoring {
+			go m.packetListener()
+		}
 	}
+
+	m.Logger.Info("数据处理流水线启动完成")
+	return nil
+}
+
+// processingWorker 处理工作协程
+func (m *DLPModule) processingWorker(workerID int) {
+	m.Logger.Debug("启动处理工作协程", "worker_id", workerID)
+	defer m.Logger.Debug("处理工作协程退出", "worker_id", workerID)
+
+	for {
+		select {
+		case task := <-m.processingCh:
+			if err := m.processTask(task); err != nil {
+				m.Logger.Error("处理任务失败", "task_id", task.ID, "error", err)
+			}
+		case <-m.stopCh:
+			return
+		}
+	}
+}
+
+// packetListener 数据包监听器
+func (m *DLPModule) packetListener() {
+	m.Logger.Debug("启动数据包监听器")
+	defer m.Logger.Debug("数据包监听器退出")
+
+	// 检查拦截器管理器是否可用
+	if m.interceptorManager == nil {
+		m.Logger.Warn("拦截器管理器未初始化，跳过数据包监听")
+		return
+	}
+
+	// 获取流量拦截器
+	trafficInterceptor, exists := m.interceptorManager.GetInterceptor("traffic")
+	if !exists {
+		m.Logger.Warn("流量拦截器不存在，跳过数据包监听")
+		return
+	}
+
+	// 获取数据包通道
+	packetCh := trafficInterceptor.GetPacketChannel()
+
+	for {
+		select {
+		case packet := <-packetCh:
+			// 创建处理任务
+			task := &ProcessingTask{
+				ID:        fmt.Sprintf("task_%d", time.Now().UnixNano()),
+				Timestamp: time.Now(),
+				Packet:    packet,
+				Context:   context.Background(),
+			}
+
+			// 发送到处理通道
+			select {
+			case m.processingCh <- task:
+			case <-m.stopCh:
+				return
+			default:
+				m.Logger.Warn("处理通道已满，丢弃任务", "task_id", task.ID)
+			}
+		case <-m.stopCh:
+			return
+		}
+	}
+}
+
+// processTask 处理任务
+func (m *DLPModule) processTask(task *ProcessingTask) error {
+	// 检查核心组件是否可用
+	if m.protocolManager == nil || m.analysisManager == nil ||
+		m.policyEngine == nil || m.executionManager == nil {
+		return fmt.Errorf("核心组件未初始化")
+	}
+
+	// 1. 协议解析
+	parsedData, err := m.protocolManager.ParsePacket(task.Packet)
+	if err != nil {
+		if task.Packet.ProcessInfo != nil {
+			return fmt.Errorf("协议【%s】解析失败: %w", task.Packet.ProcessInfo.ProcessName, err)
+		}
+		return fmt.Errorf("协议解析失败: %w", err)
+	}
+
+	// 2. 内容分析
+	analysisResult, err := m.analysisManager.AnalyzeContent(task.Context, parsedData)
+	if err != nil {
+		return fmt.Errorf("内容分析失败: %w", err)
+	}
+
+	// 3. 策略决策
+	decisionContext := &engine.DecisionContext{
+		PacketInfo:     task.Packet,
+		ParsedData:     parsedData,
+		AnalysisResult: analysisResult,
+		// 其他上下文信息可以在这里添加
+	}
+
+	decision, err := m.policyEngine.EvaluatePolicy(task.Context, decisionContext)
+	if err != nil {
+		return fmt.Errorf("策略评估失败: %w", err)
+	}
+
+	// 4. 动作执行
+	_, err = m.executionManager.ExecuteDecision(task.Context, decision)
+	if err != nil {
+		return fmt.Errorf("动作执行失败: %w", err)
+	}
+
+	m.Logger.Debug("任务处理完成",
+		"task_id", task.ID,
+		"action", decision.Action.String(),
+		"risk_level", decision.RiskLevel.String())
 
 	return nil
 }
 
 // Stop 停止模块
 func (m *DLPModule) Stop() error {
-	m.Logger.Info("停止数据防泄漏模块")
+	m.Logger.Info("停止数据防泄漏模块v2.0")
+
+	// 设置停止标志
+	m.mu.Lock()
+	m.running = false
+	m.mu.Unlock()
+
+	// 发送停止信号
+	close(m.stopCh)
+
+	// 停止核心组件
+	if err := m.stopCoreComponents(); err != nil {
+		m.Logger.Error("停止核心组件失败", "error", err)
+	}
+
+	// 停止传统组件
+	if err := m.stopLegacyComponents(); err != nil {
+		m.Logger.Error("停止传统组件失败", "error", err)
+	}
+
+	m.Logger.Info("数据防泄漏模块已停止")
+	return nil
+}
+
+// stopCoreComponents 停止核心组件
+func (m *DLPModule) stopCoreComponents() error {
+	m.Logger.Info("停止DLP核心组件")
+
+	// 停止拦截器管理器
+	if m.interceptorManager != nil {
+		if err := m.interceptorManager.StopAll(); err != nil {
+			m.Logger.Error("停止拦截器管理器失败", "error", err)
+		}
+	}
+
+	// 停止执行管理器
+	if m.executionManager != nil {
+		if err := m.executionManager.Stop(); err != nil {
+			m.Logger.Error("停止执行管理器失败", "error", err)
+		}
+	}
+
+	// 停止策略引擎
+	if m.policyEngine != nil {
+		if err := m.policyEngine.Stop(); err != nil {
+			m.Logger.Error("停止策略引擎失败", "error", err)
+		}
+	}
+
+	// 停止内容分析管理器
+	if m.analysisManager != nil {
+		if err := m.analysisManager.Stop(); err != nil {
+			m.Logger.Error("停止内容分析管理器失败", "error", err)
+		}
+	}
+
+	// 停止协议解析管理器
+	if m.protocolManager != nil {
+		if err := m.protocolManager.Stop(); err != nil {
+			m.Logger.Error("停止协议解析管理器失败", "error", err)
+		}
+	}
+
+	m.Logger.Info("DLP核心组件已停止")
+	return nil
+}
+
+// stopLegacyComponents 停止传统组件
+func (m *DLPModule) stopLegacyComponents() error {
+	m.Logger.Info("停止传统组件")
 
 	// 停止监控
 	if m.monitorCancel != nil {
@@ -138,6 +604,7 @@ func (m *DLPModule) Stop() error {
 		m.Logger.Warn("扫描器未初始化，跳过停止监控")
 	}
 
+	m.Logger.Info("传统组件已停止")
 	return nil
 }
 
@@ -483,4 +950,55 @@ func (m *DLPModule) HandleEvent(ctx context.Context, event *plugin.Event) error 
 		// 忽略其他事件
 		return nil
 	}
+}
+
+// registerProtocolParsers 注册所有协议解析器
+func (m *DLPModule) registerProtocolParsers() error {
+	logger := m.dlpConfig.ParserConfig.Logger
+
+	// HTTP 解析器（只处理明文HTTP）
+	httpParser := parser.NewHTTPParser(logger)
+	if err := m.protocolManager.RegisterParser(httpParser); err != nil {
+		return fmt.Errorf("注册HTTP解析器失败: %w", err)
+	}
+	logger.Info("注册HTTP解析器成功", "protocols", httpParser.GetSupportedProtocols())
+
+	// HTTPS 解析器（处理TLS/SSL加密的HTTP）
+	httpsParser := parser.NewHTTPSParser(logger, m.dlpConfig.ParserConfig.TLSConfig)
+	if err := m.protocolManager.RegisterParser(httpsParser); err != nil {
+		return fmt.Errorf("注册HTTPS解析器失败: %w", err)
+	}
+	logger.Info("注册HTTPS解析器成功", "protocols", httpsParser.GetSupportedProtocols())
+
+	// FTP 解析器
+	ftpParser := parser.NewFTPParser(logger)
+	if err := m.protocolManager.RegisterParser(ftpParser); err != nil {
+		return fmt.Errorf("注册FTP解析器失败: %w", err)
+	}
+	logger.Info("注册FTP解析器成功", "protocols", ftpParser.GetSupportedProtocols())
+
+	// SMTP 解析器
+	smtpParser := parser.NewSMTPParser(logger)
+	if err := m.protocolManager.RegisterParser(smtpParser); err != nil {
+		return fmt.Errorf("注册SMTP解析器失败: %w", err)
+	}
+	logger.Info("注册SMTP解析器成功", "protocols", smtpParser.GetSupportedProtocols())
+
+	// MySQL 解析器
+	mysqlParser := parser.NewMySQLParser(logger)
+	if err := m.protocolManager.RegisterParser(mysqlParser); err != nil {
+		return fmt.Errorf("注册MySQL解析器失败: %w", err)
+	}
+	logger.Info("注册MySQL解析器成功", "protocols", mysqlParser.GetSupportedProtocols())
+
+	// 添加默认解析器用于未知协议
+	defaultParser := parser.NewDefaultParser(logger)
+	if err := m.protocolManager.RegisterParser(defaultParser); err != nil {
+		return fmt.Errorf("注册默认解析器失败: %w", err)
+	}
+	logger.Info("注册默认解析器成功", "protocols", defaultParser.GetSupportedProtocols())
+
+	logger.Info("协议解析器注册完成", "count", 6)
+	logger.Info("支持的协议", "protocols", []string{"http", "https", "tls", "ftp", "smtp", "mysql", "unknown", "default"})
+	return nil
 }

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // ModelClientConfig 定义了大语言模型客户端的配置
@@ -24,13 +24,13 @@ type ModelClientConfig struct {
 // ModelClient 实现了与大语言模型的交互
 type ModelClient struct {
 	config     *ModelClientConfig
-	logger     sdk.Logger
+	logger     logging.Logger
 	httpClient *http.Client
 	servers    map[string]*Server // 可用的MCP服务器
 }
 
 // NewModelClient 创建一个新的大语言模型客户端
-func NewModelClient(config *ModelClientConfig, logger sdk.Logger) (*ModelClient, error) {
+func NewModelClient(config *ModelClientConfig, logger logging.Logger) (*ModelClient, error) {
 	if config == nil {
 		return nil, fmt.Errorf("配置不能为空")
 	}

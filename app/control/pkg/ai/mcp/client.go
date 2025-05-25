@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -29,12 +29,12 @@ type ClientConfig struct {
 type Client struct {
 	config     *ClientConfig
 	httpClient *http.Client
-	logger     sdk.Logger
+	logger     logging.Logger
 	mcpClient  *client.Client
 }
 
 // NewClient 创建一个新的 MCP Client
-func NewClient(config *ClientConfig, logger sdk.Logger) (*Client, error) {
+func NewClient(config *ClientConfig, logger logging.Logger) (*Client, error) {
 	if config == nil {
 		config = &ClientConfig{}
 	}

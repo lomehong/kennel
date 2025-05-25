@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/lomehong/kennel/app/control/pkg/ai/mcp"
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 func main() {
@@ -27,11 +27,18 @@ func main() {
 	flag.Parse()
 
 	// 创建日志记录器
-	logLevel := sdk.LogLevelInfo
+	logConfig := logging.DefaultLogConfig()
 	if *debug {
-		logLevel = sdk.LogLevelDebug
+		logConfig.Level = logging.LogLevelDebug
+	} else {
+		logConfig.Level = logging.LogLevelInfo
 	}
-	logger := sdk.NewLogger("mcp-test", logLevel)
+	baseLogger, err := logging.NewEnhancedLogger(logConfig)
+	if err != nil {
+		fmt.Printf("创建日志记录器失败: %v\n", err)
+		os.Exit(1)
+	}
+	logger := baseLogger.Named("mcp-test")
 
 	// 创建上下文
 	ctx, cancel := context.WithCancel(context.Background())

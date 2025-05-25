@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/lomehong/kennel/app/control/pkg/ai"
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 func main() {
@@ -44,7 +44,14 @@ func main() {
 	}
 
 	// 创建日志记录器
-	logger := sdk.NewLogger("ai-test", sdk.LogLevelInfo)
+	logConfig := logging.DefaultLogConfig()
+	logConfig.Level = logging.LogLevelInfo
+	baseLogger, err := logging.NewEnhancedLogger(logConfig)
+	if err != nil {
+		fmt.Printf("创建日志记录器失败: %v\n", err)
+		os.Exit(1)
+	}
+	logger := baseLogger.Named("ai-test")
 	logger.Info("初始化AI测试程序")
 
 	// 创建上下文

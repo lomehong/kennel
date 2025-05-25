@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/lomehong/kennel/app/control/pkg/ai/mcp"
-	sdk "github.com/lomehong/kennel/pkg/sdk/go"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // AIProvider 表示 AI 提供者类型
@@ -24,7 +24,7 @@ const (
 
 // AIManager 管理AI相关功能
 type AIManager struct {
-	logger      sdk.Logger
+	logger      logging.Logger
 	config      map[string]interface{}
 	mcpServers  map[string]*mcp.Server // 多个MCP服务器，键为服务器名称
 	modelClient *mcp.ModelClient       // 大语言模型客户端
@@ -34,7 +34,7 @@ type AIManager struct {
 }
 
 // NewAIManager 创建一个新的AI管理器
-func NewAIManager(logger sdk.Logger, config map[string]interface{}) *AIManager {
+func NewAIManager(logger logging.Logger, config map[string]interface{}) *AIManager {
 	return &AIManager{
 		logger:      logger,
 		config:      config,
@@ -377,7 +377,7 @@ func getConfigDuration(config map[string]interface{}, key string, defaultValue t
 }
 
 // 注册默认工具
-func registerDefaultTools(server *mcp.Server, logger sdk.Logger) {
+func registerDefaultTools(server *mcp.Server, logger logging.Logger) {
 	// 注册进程终止工具
 	processKillTool := &mcp.ProcessKillTool{
 		Logger: logger,

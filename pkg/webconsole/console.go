@@ -11,9 +11,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/hashicorp/go-hclog"
 	"github.com/lomehong/kennel/pkg/interfaces"
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 // Console 定义Web控制台
@@ -31,7 +30,7 @@ type Console struct {
 	engine *gin.Engine
 
 	// 日志
-	logger hclog.Logger
+	logger logging.Logger
 
 	// 互斥锁
 	mu sync.RWMutex
@@ -61,14 +60,32 @@ func NewConsole(config Config, app interfaces.AppInterface) (*Console, error) {
 	engine := gin.New()
 
 	// 创建日志
-	log := logger.NewLogger("web-console", hclog.LevelFromString(config.LogLevel))
+	logConfig := logging.DefaultLogConfig()
+	switch config.LogLevel {
+	case "debug":
+		logConfig.Level = logging.LogLevelDebug
+	case "info":
+		logConfig.Level = logging.LogLevelInfo
+	case "warn":
+		logConfig.Level = logging.LogLevelWarn
+	case "error":
+		logConfig.Level = logging.LogLevelError
+	default:
+		logConfig.Level = logging.LogLevelInfo
+	}
+
+	baseLogger, err := logging.NewEnhancedLogger(logConfig)
+	if err != nil {
+		return nil, fmt.Errorf("创建日志记录器失败: %w", err)
+	}
+	log := baseLogger.Named("web-console")
 
 	// 创建Web控制台
 	console := &Console{
 		config:      config,
 		app:         app,
 		engine:      engine,
-		logger:      log.GetHCLogger(),
+		logger:      log,
 		initialized: false,
 		started:     false,
 	}

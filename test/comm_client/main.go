@@ -9,9 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
 	"github.com/lomehong/kennel/pkg/comm"
-	"github.com/lomehong/kennel/pkg/logger"
+	"github.com/lomehong/kennel/pkg/logging"
 )
 
 var (
@@ -22,7 +21,14 @@ func main() {
 	flag.Parse()
 
 	// 创建日志器
-	log := logger.NewLogger("comm-test", hclog.Info)
+	logConfig := logging.DefaultLogConfig()
+	logConfig.Level = logging.LogLevelInfo
+	baseLogger, err := logging.NewEnhancedLogger(logConfig)
+	if err != nil {
+		fmt.Printf("创建日志记录器失败: %v\n", err)
+		os.Exit(1)
+	}
+	log := baseLogger.Named("comm-test")
 	log.Info("通讯模块测试客户端启动")
 
 	// 创建配置
