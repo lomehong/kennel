@@ -269,3 +269,80 @@ ocr_logging:
 
   # 是否记录错误详情
   log_error_details: true
+
+# 规则配置
+rules:
+  # 敏感信息检测规则
+  sensitive_data:
+    - name: "身份证号检测"
+      type: "regex"
+      pattern: "[1-9]\\d{5}(18|19|20)\\d{2}((0[1-9])|(1[0-2]))(([0-2][1-9])|10|20|30|31)\\d{3}[0-9Xx]"
+      risk_level: "high"
+      action: "alert"
+      enabled: true
+
+    - name: "手机号检测"
+      type: "regex"
+      pattern: "1[3-9]\\d{9}"
+      risk_level: "medium"
+      action: "audit"
+      enabled: true
+
+    - name: "邮箱地址检测"
+      type: "regex"
+      pattern: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+      risk_level: "low"
+      action: "audit"
+      enabled: true
+
+    - name: "信用卡号检测"
+      type: "regex"
+      pattern: "\\b(?:\\d{4}[-\\s]?){3}\\d{4}\\b"
+      risk_level: "high"
+      action: "block"
+      enabled: true
+
+  # 关键词检测规则
+  keywords:
+    - name: "机密文档关键词"
+      keywords: ["机密", "绝密", "内部", "保密", "confidential", "secret", "internal"]
+      risk_level: "high"
+      action: "alert"
+      case_sensitive: false
+      whole_word: true
+      enabled: true
+
+    - name: "密码相关关键词"
+      keywords: ["password", "passwd", "pwd", "密码", "口令"]
+      risk_level: "medium"
+      action: "audit"
+      case_sensitive: false
+      whole_word: true
+      enabled: true
+
+# 告警配置
+alerts:
+  channels:
+    - type: "email"
+      enabled: false
+      config:
+        smtp_server: "smtp.example.com"
+        smtp_port: 587
+        username: "alert@example.com"
+        password: "password"
+        recipients: ["admin@example.com"]
+
+    - type: "webhook"
+      enabled: false
+      config:
+        url: "https://hooks.example.com/dlp-alerts"
+        method: "POST"
+
+# 审计配置
+audit:
+  enabled: true
+  log_path: "logs/dlp_audit.log"
+  max_size: 104857600  # 100MB
+  max_age: 30  # 30天
+  max_backups: 10
+  compress: true

@@ -1,5 +1,6 @@
-# DLP多协议支持配置文件
+# DLP多协议支持配置示例文件
 # 这是一个生产级的DLP系统配置，支持多种网络协议的数据泄露防护
+# 注意：这是一个示例配置文件，实际使用时请复制相关配置到config.yaml中
 
 # 基本配置
 name: "DLP多协议防护系统"
@@ -27,7 +28,7 @@ interceptor:
     channel_size: 10000
     worker_count: 8
     priority: 0
-    
+
   # 绕过配置
   bypass:
     # 绕过的IP地址段
@@ -36,7 +37,7 @@ interceptor:
       - "10.0.0.0/8"     # 私有网络
       - "172.16.0.0/12"  # 私有网络
       - "192.168.0.0/16" # 私有网络
-    
+
     # 绕过的端口
     ports:
       - 22    # SSH
@@ -52,24 +53,24 @@ parsers:
     decode_gzip: true
     extract_forms: true
     extract_cookies: true
-    
+
   https:
     enabled: true
     tls_decrypt: false  # 生产环境中需要配置证书
     max_body_size: 10485760
     cert_store: "/etc/dlp/certs/"
-    
+
   ftp:
     enabled: true
     monitor_data_channel: true
     max_file_size: 104857600  # 100MB
-    
+
   smtp:
     enabled: true
     parse_attachments: true
     max_email_size: 52428800  # 50MB
     extract_headers: true
-    
+
   # 数据库协议
   mysql:
     enabled: true
@@ -79,15 +80,15 @@ parsers:
       - "customers"
       - "payments"
       - "personal_info"
-    
+
   postgresql:
     enabled: true
     log_queries: true
-    
+
   sqlserver:
     enabled: true
     log_queries: true
-    
+
   # 消息队列协议
   mqtt:
     enabled: true
@@ -96,30 +97,30 @@ parsers:
       - "user/+"
       - "payment/+"
       - "personal/+"
-      
+
   kafka:
     enabled: true
     log_messages: true
-    
+
   amqp:
     enabled: true
     log_exchanges: true
-    
+
   # 文件传输协议
   sftp:
     enabled: true
     monitor_uploads: true
     monitor_downloads: true
-    
+
   smb:
     enabled: true
     monitor_file_access: true
-    
+
   # API协议
   grpc:
     enabled: true
     decode_protobuf: false  # 需要proto文件
-    
+
   graphql:
     enabled: true
     log_queries: true
@@ -134,27 +135,27 @@ analyzer:
       - name: "chinese_id"
         pattern: "\\b\\d{17}[\\dXx]\\b"
         severity: "high"
-        
+
       # 信用卡号
       - name: "credit_card"
         pattern: "\\b(?:\\d{4}[\\s-]?){3}\\d{4}\\b"
         severity: "high"
-        
+
       # 手机号
       - name: "phone_number"
         pattern: "\\b1[3-9]\\d{9}\\b"
         severity: "medium"
-        
+
       # 邮箱地址
       - name: "email"
         pattern: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
         severity: "medium"
-        
+
       # IP地址
       - name: "ip_address"
         pattern: "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b"
         severity: "low"
-        
+
   # 文件类型检测
   file_types:
     enabled: true
@@ -164,7 +165,7 @@ analyzer:
       - ".cmd"
       - ".scr"
       - ".pif"
-    
+
     monitored_extensions:
       - ".doc"
       - ".docx"
@@ -173,7 +174,7 @@ analyzer:
       - ".xlsx"
       - ".zip"
       - ".rar"
-      
+
   # 内容大小限制
   size_limits:
     max_content_size: 104857600  # 100MB
@@ -190,14 +191,14 @@ rules:
         - direction: "outbound"
         - contains_sensitive: true
       action: "block"
-      
+
     - name: "block_large_file_transfer"
       description: "阻断大文件传输"
       conditions:
         - protocol: ["ftp", "sftp"]
         - file_size: ">100MB"
       action: "block"
-      
+
   # 告警规则
   alert:
     - name: "sensitive_data_access"
@@ -206,7 +207,7 @@ rules:
         - protocol: ["mysql", "postgresql", "sqlserver"]
         - table: ["users", "customers", "payments"]
       action: "alert"
-      
+
     - name: "suspicious_email"
       description: "可疑邮件告警"
       conditions:
@@ -222,7 +223,7 @@ actions:
     enabled: true
     response_code: 403
     response_message: "访问被DLP系统阻断"
-    
+
   # 告警动作
   alert:
     enabled: true
@@ -233,7 +234,7 @@ actions:
       - type: "email"
         smtp_server: "smtp.company.com"
         recipients: ["security@company.com"]
-        
+
   # 审计动作
   audit:
     enabled: true
@@ -244,19 +245,19 @@ actions:
       database: "dlp_audit"
       username: "dlp_user"
       password: "${DLP_DB_PASSWORD}"
-      
+
 # 性能配置
 performance:
   # 并发配置
   max_concurrent_connections: 10000
   max_concurrent_parsers: 100
-  
+
   # 缓存配置
   cache:
     enabled: true
     max_entries: 100000
     ttl: 3600  # 1小时
-    
+
   # 限流配置
   rate_limit:
     enabled: true
@@ -273,7 +274,7 @@ security:
         replacement: "***ID***"
       - pattern: "\\b(?:\\d{4}[\\s-]?){3}\\d{4}\\b"
         replacement: "***CARD***"
-        
+
   # 加密配置
   encryption:
     enabled: true
@@ -287,13 +288,13 @@ monitoring:
     enabled: true
     endpoint: "/metrics"
     port: 9090
-    
+
   # 健康检查
   health_check:
     enabled: true
     endpoint: "/health"
     interval: 30
-    
+
   # 统计信息
   statistics:
     enabled: true

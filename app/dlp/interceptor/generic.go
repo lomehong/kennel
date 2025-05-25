@@ -45,46 +45,8 @@ type ProductionInterceptor struct {
 	platformImpl PlatformInterceptor
 }
 
-// MockPlatformInterceptorAdapter 模拟拦截器适配器
-type MockPlatformInterceptorAdapter struct {
-	impl PlatformInterceptor
-}
-
-func (m *MockPlatformInterceptorAdapter) Initialize(config InterceptorConfig) error {
-	// 模拟拦截器不需要初始化
-	return nil
-}
-
-func (m *MockPlatformInterceptorAdapter) Start() error {
-	return m.impl.StartCapture()
-}
-
-func (m *MockPlatformInterceptorAdapter) Stop() error {
-	return m.impl.StopCapture()
-}
-
-func (m *MockPlatformInterceptorAdapter) SetFilter(filter string) error {
-	return m.impl.SetFilter(filter)
-}
-
-func (m *MockPlatformInterceptorAdapter) GetPacketChannel() <-chan *PacketInfo {
-	return m.impl.GetPacketChannel()
-}
-
-func (m *MockPlatformInterceptorAdapter) Reinject(packet *PacketInfo) error {
-	return m.impl.ReinjectPacket(packet)
-}
-
-func (m *MockPlatformInterceptorAdapter) GetStats() InterceptorStats {
-	// 返回基本统计信息
-	return InterceptorStats{
-		StartTime: time.Now(),
-	}
-}
-
-func (m *MockPlatformInterceptorAdapter) HealthCheck() error {
-	return nil
-}
+// 注意：已移除MockPlatformInterceptorAdapter以符合生产级要求
+// DLP插件仅支持真实的平台特定拦截器实现
 
 // createRealInterceptor 在各平台文件中实现
 

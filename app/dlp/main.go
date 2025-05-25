@@ -67,33 +67,104 @@ func main() {
 	// 创建数据防泄漏模块
 	module := NewDLPModule(logger.Named("dlp"))
 
-	// 尝试从配置文件加载配置
-	configPath := "config.yaml"
-	fileConfig, err := loadConfigFromFile(configPath)
-	if err != nil {
-		logger.Warn("加载配置文件失败，使用默认配置", "error", err, "config_path", configPath)
-		fileConfig = make(map[string]interface{})
-	} else {
-		logger.Info("已加载配置文件", "config_path", configPath)
+	// 尝试从配置文件加载配置 - 优先使用当前目录的配置文件
+	configPaths := []string{
+		"config.yaml",       // 当前目录
+		"../config.yaml",    // 上级目录
+		"../../config.yaml", // 根目录
 	}
 
-	// 创建配置，合并文件配置和默认配置
+	var fileConfig map[string]interface{}
+	var configPath string
+	var configErr error
+
+	for _, path := range configPaths {
+		logger.Info("尝试加载配置文件", "path", path)
+		fileConfig, configErr = loadConfigFromFile(path)
+		if configErr == nil {
+			configPath = path
+			logger.Info("已加载配置文件", "config_path", configPath, "keys_count", len(fileConfig))
+
+			// 调试：打印配置键
+			keys := make([]string, 0, len(fileConfig))
+			for k := range fileConfig {
+				keys = append(keys, k)
+			}
+			logger.Info("配置文件包含的键", "keys", keys)
+
+			// 检查OCR配置
+			if ocrConfig, ok := fileConfig["ocr"]; ok {
+				logger.Info("找到OCR配置", "ocr_config", ocrConfig)
+			} else {
+				logger.Warn("配置文件中未找到OCR配置")
+			}
+			break
+		} else {
+			logger.Warn("加载配置文件失败", "path", path, "error", configErr)
+		}
+	}
+
+	if configErr != nil {
+		logger.Warn("所有配置文件加载失败，使用默认配置", "error", configErr, "tried_paths", configPaths)
+		fileConfig = make(map[string]interface{})
+	}
+
+	// 提取DLP配置段
+	var dlpConfig map[string]interface{}
+	if dlpValue, exists := fileConfig["dlp"]; exists {
+		logger.Info("找到DLP配置值", "type", fmt.Sprintf("%T", dlpValue))
+
+		// 处理 map[interface{}]interface{} 类型
+		if dlpMap, ok := dlpValue.(map[interface{}]interface{}); ok {
+			dlpConfig = make(map[string]interface{})
+			for k, v := range dlpMap {
+				if keyStr, ok := k.(string); ok {
+					dlpConfig[keyStr] = v
+				}
+			}
+			// 获取配置键列表
+			keys := make([]string, 0, len(dlpConfig))
+			for k := range dlpConfig {
+				keys = append(keys, k)
+			}
+			logger.Info("找到DLP配置段", "keys", keys)
+		} else if dlpSection, ok := dlpValue.(map[string]interface{}); ok {
+			dlpConfig = dlpSection
+			// 获取配置键列表
+			keys := make([]string, 0, len(dlpConfig))
+			for k := range dlpConfig {
+				keys = append(keys, k)
+			}
+			logger.Info("找到DLP配置段", "keys", keys)
+		} else {
+			logger.Warn("DLP配置段类型转换失败", "type", fmt.Sprintf("%T", dlpValue))
+			dlpConfig = make(map[string]interface{})
+		}
+	} else {
+		logger.Warn("配置文件中未找到DLP配置段，使用默认配置")
+		dlpConfig = make(map[string]interface{})
+	}
+
+	// 合并DLP配置和默认配置
+	defaultDLPConfig := map[string]interface{}{
+		"log_level":         "info",
+		"monitor_clipboard": true,
+		"monitor_files":     true,
+		"monitor_network":   true,
+		"monitored_directories": []string{
+			"data/dlp/monitored",
+		},
+		"monitored_file_types": []string{
+			"*.txt", "*.doc", "*.docx", "*.xls", "*.xlsx", "*.pdf",
+		},
+		"network_protocols": []string{
+			"http", "https", "ftp", "smtp",
+		},
+	}
+
+	// 创建配置，使用DLP配置段
 	config := &plugin.ModuleConfig{
-		Settings: mergeConfigs(fileConfig, map[string]interface{}{
-			"log_level":         "info",
-			"monitor_clipboard": true,
-			"monitor_files":     true,
-			"monitor_network":   true,
-			"monitored_directories": []string{
-				"data/dlp/monitored",
-			},
-			"monitored_file_types": []string{
-				"*.txt", "*.doc", "*.docx", "*.xls", "*.xlsx", "*.pdf",
-			},
-			"network_protocols": []string{
-				"http", "https", "ftp", "smtp",
-			},
-		}),
+		Settings: mergeConfigs(dlpConfig, defaultDLPConfig),
 	}
 
 	// 初始化模块

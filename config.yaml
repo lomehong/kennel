@@ -99,6 +99,45 @@ dlp:
     - "*.pdf"
     - "*.txt"
 
+  # OCR配置
+  ocr:
+    enabled: true
+    engine: "tesseract"
+    language: "chi_sim+eng"
+    timeout: 30
+    max_image_size: 10485760  # 10MB
+    confidence_threshold: 60
+    preprocessing:
+      enabled: true
+      resize: true
+      denoise: true
+      contrast: true
+    cache:
+      enabled: true
+      max_size: 100
+      ttl: 3600
+    performance:
+      max_concurrent: 2
+      queue_size: 100
+      memory_limit: 536870912  # 512MB
+
+  # ML配置
+  ml:
+    enabled: true
+    model_path: "models/dlp_model.tflite"
+    confidence_threshold: 0.7
+    max_text_length: 10000
+    batch_size: 32
+    timeout: 10
+    cache:
+      enabled: true
+      max_size: 1000
+      ttl: 1800
+    performance:
+      max_concurrent: 4
+      queue_size: 200
+      memory_limit: 1073741824  # 1GB
+
 # 终端管控模块配置
 control:
   # 是否允许远程执行命令

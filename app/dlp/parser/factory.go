@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/lomehong/kennel/pkg/logging"
@@ -109,13 +110,13 @@ func (f *ParserFactoryImpl) registerBuiltinParsers() {
 		return NewSMBParser(config.Logger), nil
 	}
 	f.creators["cifs"] = func(config ParserConfig) (ProtocolParser, error) {
-		return NewCIFSParser(config.Logger), nil
+		return NewSMBParser(config.Logger), nil // CIFS使用SMB解析器
 	}
 
-	// WebSocket 解析器
-	f.creators["websocket"] = func(config ParserConfig) (ProtocolParser, error) {
-		return NewWebSocketParser(config.Logger), nil
-	}
+	// WebSocket 解析器 - 暂时注释掉，等待修复
+	// f.creators["websocket"] = func(config ParserConfig) (ProtocolParser, error) {
+	//	return NewWebSocketParser(config.Logger), nil
+	// }
 
 	// 数据库协议解析器
 	f.creators["mysql"] = func(config ParserConfig) (ProtocolParser, error) {
@@ -176,18 +177,37 @@ func (d *ProtocolDetector) DetectProtocol(data []byte, port uint16) string {
 		return "unknown"
 	}
 
+	// 基于数据内容的深度检测（优先级最高）
+	protocolByContent := d.detectByContent(data)
+
 	// 基于端口的初步判断
 	protocolByPort := d.detectByPort(port)
 
-	// 基于数据内容的深度检测
-	protocolByContent := d.detectByContent(data)
-
-	// 优先使用内容检测结果，如果无法确定则使用端口检测结果
+	// 内容检测结果优先，但需要验证一致性
 	if protocolByContent != "unknown" {
-		return protocolByContent
+		// 如果内容检测和端口检测结果一致，直接返回
+		if protocolByContent == protocolByPort {
+			d.logger.Debug("协议检测一致", "protocol", protocolByContent, "port", port)
+			return protocolByContent
+		}
+
+		// 如果不一致，进行冲突解决
+		resolved := d.resolveProtocolConflict(protocolByContent, protocolByPort, data, port)
+		d.logger.Debug("协议检测冲突已解决",
+			"content_detected", protocolByContent,
+			"port_detected", protocolByPort,
+			"resolved", resolved,
+			"port", port)
+		return resolved
 	}
 
-	return protocolByPort
+	// 如果内容检测失败，使用端口检测结果
+	if protocolByPort != "unknown" {
+		d.logger.Debug("使用端口检测结果", "protocol", protocolByPort, "port", port)
+		return protocolByPort
+	}
+
+	return "unknown"
 }
 
 // detectByPort 基于端口检测协议
@@ -255,20 +275,81 @@ func (d *ProtocolDetector) detectByContent(data []byte) string {
 	return "unknown"
 }
 
-// isHTTP 检测是否为HTTP协议
-func (d *ProtocolDetector) isHTTP(data []byte) bool {
-	httpMethods := []string{"GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH ", "TRACE "}
-	dataStr := string(data[:min(len(data), 20)])
-
-	for _, method := range httpMethods {
-		if len(dataStr) >= len(method) && dataStr[:len(method)] == method {
-			return true
+// resolveProtocolConflict 解决协议检测冲突
+func (d *ProtocolDetector) resolveProtocolConflict(contentProtocol, portProtocol string, data []byte, port uint16) string {
+	// 特殊情况处理：HTTP在非标准端口上
+	if contentProtocol == "http" && portProtocol != "http" {
+		// 如果内容明确是HTTP，优先使用内容检测结果
+		if d.isHTTPStrict(data) {
+			return "http"
 		}
 	}
 
-	// 检测HTTP响应
-	if len(dataStr) >= 8 && dataStr[:8] == "HTTP/1." {
+	// 特殊情况处理：MySQL误识别
+	if contentProtocol == "mysql" && portProtocol == "http" {
+		// 重新严格检查是否真的是MySQL
+		if !d.isMySQLStrict(data) {
+			return "http"
+		}
+	}
+
+	// 特殊情况处理：HTTPS在标准端口
+	if contentProtocol == "https" && port == 443 {
+		return "https"
+	}
+
+	// 默认情况：内容检测优先
+	return contentProtocol
+}
+
+// isHTTP 检测是否为HTTP协议
+func (d *ProtocolDetector) isHTTP(data []byte) bool {
+	return d.isHTTPStrict(data) || d.isHTTPLoose(data)
+}
+
+// isHTTPStrict 严格的HTTP检测
+func (d *ProtocolDetector) isHTTPStrict(data []byte) bool {
+	if len(data) < 8 {
+		return false
+	}
+
+	dataStr := string(data[:min(len(data), 100)])
+
+	// HTTP请求方法检测（严格）
+	httpMethods := []string{"GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH ", "TRACE ", "CONNECT "}
+	for _, method := range httpMethods {
+		if len(dataStr) >= len(method) && dataStr[:len(method)] == method {
+			// 进一步验证：检查是否包含HTTP版本
+			if strings.Contains(dataStr, "HTTP/1.") || strings.Contains(dataStr, "HTTP/2") {
+				return true
+			}
+		}
+	}
+
+	// HTTP响应检测（严格）
+	if strings.HasPrefix(dataStr, "HTTP/1.0 ") ||
+		strings.HasPrefix(dataStr, "HTTP/1.1 ") ||
+		strings.HasPrefix(dataStr, "HTTP/2 ") {
 		return true
+	}
+
+	return false
+}
+
+// isHTTPLoose 宽松的HTTP检测
+func (d *ProtocolDetector) isHTTPLoose(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+
+	dataStr := string(data[:min(len(data), 50)])
+
+	// 检查常见HTTP头部
+	httpHeaders := []string{"Host:", "User-Agent:", "Content-Type:", "Content-Length:", "Accept:"}
+	for _, header := range httpHeaders {
+		if strings.Contains(dataStr, header) {
+			return true
+		}
 	}
 
 	return false
@@ -353,17 +434,58 @@ func (d *ProtocolDetector) isSMTP(data []byte) bool {
 
 // isMySQL 检测是否为MySQL协议
 func (d *ProtocolDetector) isMySQL(data []byte) bool {
+	return d.isMySQLStrict(data)
+}
+
+// isMySQLStrict 严格的MySQL协议检测
+func (d *ProtocolDetector) isMySQLStrict(data []byte) bool {
 	if len(data) < 5 {
 		return false
 	}
 
 	// MySQL握手包检测
 	// 包长度 (3 bytes) + 序列号 (1 byte) + 协议版本 (1 byte)
-	if data[4] == 0x0a { // MySQL协议版本10
-		return true
+
+	// 检查包长度是否合理（MySQL握手包通常较长）
+	packetLength := uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16
+	if packetLength < 20 || packetLength > 1000 {
+		return false
 	}
 
-	return false
+	// 检查序列号（握手包序列号通常为0）
+	sequenceNumber := data[3]
+	if sequenceNumber != 0 {
+		return false
+	}
+
+	// 检查协议版本（MySQL协议版本10）
+	if data[4] != 0x0a {
+		return false
+	}
+
+	// 进一步验证：检查服务器版本字符串
+	if len(data) > 10 {
+		// MySQL服务器版本字符串应该包含可打印字符
+		versionStart := 5
+		versionEnd := versionStart
+		for i := versionStart; i < len(data) && i < versionStart+20; i++ {
+			if data[i] == 0 {
+				versionEnd = i
+				break
+			}
+			// 检查是否为可打印字符
+			if data[i] < 32 || data[i] > 126 {
+				return false
+			}
+		}
+
+		// 版本字符串应该有合理的长度
+		if versionEnd-versionStart < 3 || versionEnd-versionStart > 20 {
+			return false
+		}
+	}
+
+	return true
 }
 
 // isMQTT 检测是否为MQTT协议

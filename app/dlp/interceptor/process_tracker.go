@@ -953,16 +953,200 @@ func (pt *ProcessTracker) getCurrentUser() string {
 
 // getTokenUser 从令牌获取用户信息
 func (pt *ProcessTracker) getTokenUser(token uintptr) string {
-	// 这里应该调用GetTokenInformation获取TokenUser
-	// 然后使用LookupAccountSid转换SID为用户名
-	// 由于实现复杂，暂时返回基本信息
-	return "token_user"
+	// 获取令牌用户信息的缓冲区大小
+	var tokenUserSize uint32
+	const TokenUser = 1
+
+	// 第一次调用获取所需缓冲区大小
+	ret, _, _ := pt.getTokenInformation.Call(
+		token,
+		TokenUser,
+		0, // NULL buffer
+		0, // buffer size
+		uintptr(unsafe.Pointer(&tokenUserSize)),
+	)
+
+	if tokenUserSize == 0 {
+		pt.logger.Debug("获取令牌用户信息大小失败")
+		return ""
+	}
+
+	// 分配缓冲区并获取令牌用户信息
+	tokenUserBuffer := make([]byte, tokenUserSize)
+	ret, _, _ = pt.getTokenInformation.Call(
+		token,
+		TokenUser,
+		uintptr(unsafe.Pointer(&tokenUserBuffer[0])),
+		uintptr(tokenUserSize),
+		uintptr(unsafe.Pointer(&tokenUserSize)),
+	)
+
+	if ret == 0 {
+		pt.logger.Debug("获取令牌用户信息失败")
+		return ""
+	}
+
+	// 解析TOKEN_USER结构
+	// TOKEN_USER包含一个SID_AND_ATTRIBUTES结构
+	// 这里简化处理，直接尝试转换SID
+	if len(tokenUserBuffer) >= 8 {
+		// 获取SID指针（TOKEN_USER结构的第一个字段）
+		sidPtr := *(*uintptr)(unsafe.Pointer(&tokenUserBuffer[0]))
+		if sidPtr != 0 {
+			return pt.convertSidToUsername(sidPtr)
+		}
+	}
+
+	return ""
+}
+
+// convertSidToUsername 将SID转换为用户名
+func (pt *ProcessTracker) convertSidToUsername(sidPtr uintptr) string {
+	// 加载advapi32.dll中的LookupAccountSid函数
+	lookupAccountSid := pt.advapi32.NewProc("LookupAccountSidW")
+
+	var nameSize, domainSize uint32 = 256, 256
+	nameBuffer := make([]uint16, nameSize)
+	domainBuffer := make([]uint16, domainSize)
+	var sidNameUse uint32
+
+	ret, _, _ := lookupAccountSid.Call(
+		0, // lpSystemName (NULL for local system)
+		sidPtr,
+		uintptr(unsafe.Pointer(&nameBuffer[0])),
+		uintptr(unsafe.Pointer(&nameSize)),
+		uintptr(unsafe.Pointer(&domainBuffer[0])),
+		uintptr(unsafe.Pointer(&domainSize)),
+		uintptr(unsafe.Pointer(&sidNameUse)),
+	)
+
+	if ret != 0 {
+		username := syscall.UTF16ToString(nameBuffer[:nameSize])
+		domain := syscall.UTF16ToString(domainBuffer[:domainSize])
+
+		if domain != "" && username != "" {
+			return fmt.Sprintf("%s\\%s", domain, username)
+		} else if username != "" {
+			return username
+		}
+	}
+
+	return ""
 }
 
 // getCommandLineViaWMI 通过WMI获取命令行
 func (pt *ProcessTracker) getCommandLineViaWMI(pid uint32) string {
-	// 这里应该使用WMI查询Win32_Process
-	// 由于需要COM接口，实现较复杂，暂时返回空
+	// 使用PowerShell命令查询WMI
+	// 这是一个简化的实现，避免了复杂的COM接口调用
+
+	// 构造PowerShell命令
+	psCmd := fmt.Sprintf(`Get-WmiObject -Class Win32_Process -Filter "ProcessId=%d" | Select-Object -ExpandProperty CommandLine`, pid)
+
+	// 执行PowerShell命令
+	cmd := fmt.Sprintf(`powershell.exe -Command "%s"`, psCmd)
+
+	// 使用CreateProcess执行命令
+	cmdline := pt.executeCommand(cmd)
+	if cmdline != "" {
+		// 清理输出（移除换行符等）
+		cmdline = strings.TrimSpace(cmdline)
+		cmdline = strings.ReplaceAll(cmdline, "\r\n", "")
+		cmdline = strings.ReplaceAll(cmdline, "\n", "")
+
+		if cmdline != "" && cmdline != "null" {
+			pt.logger.Debug("通过WMI获取命令行成功", "pid", pid, "cmdline", cmdline)
+			return cmdline
+		}
+	}
+
+	return ""
+}
+
+// executeCommand 执行系统命令
+func (pt *ProcessTracker) executeCommand(command string) string {
+	// 使用CreateProcess执行命令
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	createProcess := kernel32.NewProc("CreateProcessW")
+	waitForSingleObject := kernel32.NewProc("WaitForSingleObject")
+	createPipe := kernel32.NewProc("CreatePipe")
+	readFile := kernel32.NewProc("ReadFile")
+
+	// 创建管道用于读取输出
+	var readPipe, writePipe syscall.Handle
+	var sa syscall.SecurityAttributes
+	sa.Length = uint32(unsafe.Sizeof(sa))
+	sa.InheritHandle = 1
+
+	ret, _, _ := createPipe.Call(
+		uintptr(unsafe.Pointer(&readPipe)),
+		uintptr(unsafe.Pointer(&writePipe)),
+		uintptr(unsafe.Pointer(&sa)),
+		0,
+	)
+
+	if ret == 0 {
+		return ""
+	}
+
+	defer pt.closeHandle.Call(uintptr(readPipe))
+	defer pt.closeHandle.Call(uintptr(writePipe))
+
+	// 设置启动信息
+	var si syscall.StartupInfo
+	var pi syscall.ProcessInformation
+
+	si.Cb = uint32(unsafe.Sizeof(si))
+	si.Flags = 0x00000100 // STARTF_USESTDHANDLES
+	si.StdOutput = writePipe
+	si.StdErr = writePipe
+
+	// 转换命令为UTF16
+	cmdPtr, _ := syscall.UTF16PtrFromString(command)
+
+	// 创建进程
+	ret, _, _ = createProcess.Call(
+		0, // lpApplicationName
+		uintptr(unsafe.Pointer(cmdPtr)),
+		0, // lpProcessAttributes
+		0, // lpThreadAttributes
+		1, // bInheritHandles
+		0, // dwCreationFlags
+		0, // lpEnvironment
+		0, // lpCurrentDirectory
+		uintptr(unsafe.Pointer(&si)),
+		uintptr(unsafe.Pointer(&pi)),
+	)
+
+	if ret == 0 {
+		return ""
+	}
+
+	// 关闭写入端
+	pt.closeHandle.Call(uintptr(writePipe))
+
+	// 等待进程完成（最多3秒）
+	waitForSingleObject.Call(uintptr(pi.Process), 3000)
+
+	// 读取输出
+	buffer := make([]byte, 4096)
+	var bytesRead uint32
+
+	ret, _, _ = readFile.Call(
+		uintptr(readPipe),
+		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(len(buffer)),
+		uintptr(unsafe.Pointer(&bytesRead)),
+		0,
+	)
+
+	// 清理进程句柄
+	pt.closeHandle.Call(uintptr(pi.Process))
+	pt.closeHandle.Call(uintptr(pi.Thread))
+
+	if ret != 0 && bytesRead > 0 {
+		return string(buffer[:bytesRead])
+	}
+
 	return ""
 }
 

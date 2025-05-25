@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -97,6 +100,9 @@ type WinDivertInterceptorImpl struct {
 	// 性能优化组件
 	rateLimiter *AdaptiveLimiter
 
+	// 性能监控
+	performanceMonitor *PerformanceMonitor
+
 	// WinDivert 相关
 	handle        syscall.Handle
 	windivertDLL  *syscall.LazyDLL
@@ -176,6 +182,9 @@ func (w *WinDivertInterceptorImpl) Initialize(config InterceptorConfig) error {
 		w.logger,
 	)
 
+	// 初始化性能监控器
+	w.performanceMonitor = NewPerformanceMonitor(w.logger)
+
 	w.logger.Info("初始化WinDivert拦截器",
 		"filter", config.Filter,
 		"buffer_size", config.BufferSize,
@@ -197,8 +206,18 @@ func (w *WinDivertInterceptorImpl) Start() error {
 
 	// 1. 检查管理员权限
 	if !w.isRunningAsAdmin() {
+		w.logger.Warn("检测到缺少管理员权限")
+
+		// 尝试自动提升权限
+		if err := w.requestElevation(); err != nil {
+			w.logger.Error("自动权限提升失败", "error", err)
+			atomic.StoreInt32(&w.running, 0)
+			return fmt.Errorf("WinDivert需要管理员权限，自动提升失败: %w", err)
+		}
+
+		// 如果到达这里说明权限提升失败但没有退出程序
 		atomic.StoreInt32(&w.running, 0)
-		return fmt.Errorf("WinDivert需要管理员权限，请以管理员身份运行程序")
+		return fmt.Errorf("WinDivert需要管理员权限，请手动以管理员身份运行程序")
 	}
 	w.logger.Info("✓ 管理员权限检查通过")
 
@@ -564,7 +583,11 @@ func (w *WinDivertInterceptorImpl) packetReceiver(workerID int) {
 
 // processBatch 批量处理数据包（性能优化）
 func (w *WinDivertInterceptorImpl) processBatch(packets []*PacketInfo, workerID int) {
+	batchStartTime := time.Now()
+
 	for _, packet := range packets {
+		packetStartTime := time.Now()
+
 		// 根据模式决定处理方式
 		switch w.config.Mode {
 		case ModeMonitorOnly:
@@ -621,6 +644,30 @@ func (w *WinDivertInterceptorImpl) processBatch(packets []*PacketInfo, workerID 
 						"batch_size", len(packets))
 				}
 			}
+
+			// 记录单个数据包处理延迟
+			packetLatency := time.Since(packetStartTime)
+			if w.performanceMonitor != nil {
+				w.performanceMonitor.RecordProcessingLatency(packetLatency)
+			}
+		}
+
+		// 记录批处理总延迟
+		batchLatency := time.Since(batchStartTime)
+		if batchLatency > 10*time.Millisecond {
+			w.logger.Warn("批处理延迟过高",
+				"worker_id", workerID,
+				"batch_size", len(packets),
+				"latency", batchLatency)
+		}
+
+		// 定期更新性能指标
+		if w.performanceMonitor != nil {
+			w.performanceMonitor.UpdateSystemMetrics()
+			w.performanceMonitor.UpdateTrafficMetrics(
+				atomic.LoadUint64(&w.stats.PacketsProcessed),
+				atomic.LoadUint64(&w.stats.BytesProcessed),
+			)
 		}
 	}
 }
@@ -734,22 +781,24 @@ func (w *WinDivertInterceptorImpl) shouldFilterPacket(packet *PacketInfo) bool {
 	// 转换为32位整数便于比较
 	destAddr := uint32(destIPv4[0])<<24 | uint32(destIPv4[1])<<16 | uint32(destIPv4[2])<<8 | uint32(destIPv4[3])
 
-	// 检查是否为私有网络或本地地址
-	isPrivateOrLocal :=
-		// 本地回环 127.0.0.0/8
-		(destAddr >= 0x7F000000 && destAddr <= 0x7FFFFFFF) ||
-			// 私有网络A类 10.0.0.0/8
-			(destAddr >= 0x0A000000 && destAddr <= 0x0AFFFFFF) ||
-			// 私有网络B类 172.16.0.0/12
-			(destAddr >= 0xAC100000 && destAddr <= 0xAC1FFFFF) ||
-			// 私有网络C类 192.168.0.0/16
-			(destAddr >= 0xC0A80000 && destAddr <= 0xC0A8FFFF) ||
-			// 链路本地地址 169.254.0.0/16
-			(destAddr >= 0xA9FE0000 && destAddr <= 0xA9FEFFFF) ||
-			// 组播地址 224.0.0.0/4
-			(destAddr >= 0xE0000000 && destAddr <= 0xEFFFFFFF) ||
-			// 广播地址
-			(destAddr == 0xFFFFFFFF)
+	// 检查是否为私有网络或本地地址（优化版本）
+	isPrivateOrLocal := w.isPrivateOrLocalAddress(destAddr)
+
+	// 额外检查源IP地址（如果可用）
+	if !isPrivateOrLocal && packet.SourceIP != nil {
+		srcIPv4 := packet.SourceIP.To4()
+		if srcIPv4 != nil {
+			srcAddr := uint32(srcIPv4[0])<<24 | uint32(srcIPv4[1])<<16 | uint32(srcIPv4[2])<<8 | uint32(srcIPv4[3])
+			// 如果源地址是私有地址且目标是公网，可能是内网到公网的正常流量
+			// 但如果目标也是私有地址，则应该过滤
+			if w.isPrivateOrLocalAddress(srcAddr) && w.isPrivateOrLocalAddress(destAddr) {
+				isPrivateOrLocal = true
+				w.logger.Debug("检测到内网到内网流量，将被过滤",
+					"src_ip", packet.SourceIP.String(),
+					"dest_ip", packet.DestIP.String())
+			}
+		}
+	}
 
 	if isPrivateOrLocal {
 		w.logger.Debug("检测到私有/本地网络流量，将被过滤",
@@ -766,6 +815,17 @@ func (w *WinDivertInterceptorImpl) shouldFilterPacket(packet *PacketInfo) bool {
 		"dest_port", packet.DestPort,
 		"protocol", packet.Protocol)
 	return false
+}
+
+// isPrivateOrLocalAddress 检查IP地址是否为私有或本地地址
+func (w *WinDivertInterceptorImpl) isPrivateOrLocalAddress(addr uint32) bool {
+	return (addr >= 0x7F000000 && addr <= 0x7FFFFFFF) || // 本地回环 127.0.0.0/8
+		(addr >= 0x0A000000 && addr <= 0x0AFFFFFF) || // 私有网络A类 10.0.0.0/8
+		(addr >= 0xAC100000 && addr <= 0xAC1FFFFF) || // 私有网络B类 172.16.0.0/12
+		(addr >= 0xC0A80000 && addr <= 0xC0A8FFFF) || // 私有网络C类 192.168.0.0/16
+		(addr >= 0xA9FE0000 && addr <= 0xA9FEFFFF) || // 链路本地地址 169.254.0.0/16
+		(addr >= 0xE0000000 && addr <= 0xEFFFFFFF) || // 组播地址 224.0.0.0/4
+		(addr == 0xFFFFFFFF) // 广播地址
 }
 
 // parsePacket 解析数据包
@@ -1277,13 +1337,108 @@ func (w *WinDivertInterceptorImpl) checkWinDivertDriver() error {
 
 // isRunningAsAdmin 检查是否以管理员身份运行
 func (w *WinDivertInterceptorImpl) isRunningAsAdmin() bool {
-	// 尝试打开一个需要管理员权限的资源
-	_, err := os.Open("\\\\.\\PHYSICALDRIVE0")
+	// 方法1：检查令牌权限
+	if w.checkTokenElevation() {
+		return true
+	}
+
+	// 方法2：尝试打开需要管理员权限的资源
+	file, err := os.Open("\\\\.\\PHYSICALDRIVE0")
 	if err != nil {
 		w.logger.Debug("管理员权限检查失败", "error", err)
 		return false
 	}
+	file.Close()
 	return true
+}
+
+// checkTokenElevation 检查当前进程的令牌提升状态
+func (w *WinDivertInterceptorImpl) checkTokenElevation() bool {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	advapi32 := syscall.NewLazyDLL("advapi32.dll")
+
+	getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
+	openProcessToken := advapi32.NewProc("OpenProcessToken")
+	getTokenInformation := advapi32.NewProc("GetTokenInformation")
+	closeHandle := kernel32.NewProc("CloseHandle")
+
+	// 获取当前进程句柄
+	processHandle, _, _ := getCurrentProcess.Call()
+
+	// 打开进程令牌
+	var tokenHandle syscall.Handle
+	ret, _, _ := openProcessToken.Call(
+		processHandle,
+		0x0008, // TOKEN_QUERY
+		uintptr(unsafe.Pointer(&tokenHandle)),
+	)
+	if ret == 0 {
+		return false
+	}
+	defer closeHandle.Call(uintptr(tokenHandle))
+
+	// 查询令牌提升信息
+	const TokenElevation = 20
+	var elevation uint32
+	var returnLength uint32
+
+	ret, _, _ = getTokenInformation.Call(
+		uintptr(tokenHandle),
+		TokenElevation,
+		uintptr(unsafe.Pointer(&elevation)),
+		4, // sizeof(DWORD)
+		uintptr(unsafe.Pointer(&returnLength)),
+	)
+
+	return ret != 0 && elevation != 0
+}
+
+// requestElevation 请求管理员权限提升
+func (w *WinDivertInterceptorImpl) requestElevation() error {
+	w.logger.Info("检测到需要管理员权限，尝试自动提升")
+
+	// 获取当前可执行文件路径
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("获取可执行文件路径失败: %w", err)
+	}
+
+	// 获取当前工作目录
+	workDir, err := os.Getwd()
+	if err != nil {
+		workDir = filepath.Dir(exePath)
+	}
+
+	// 构建命令行参数
+	args := os.Args[1:] // 排除程序名
+	argsStr := strings.Join(args, " ")
+
+	// 使用ShellExecute以管理员身份重新启动
+	shell32 := syscall.NewLazyDLL("shell32.dll")
+	shellExecute := shell32.NewProc("ShellExecuteW")
+
+	verb, _ := syscall.UTF16PtrFromString("runas")
+	file, _ := syscall.UTF16PtrFromString(exePath)
+	params, _ := syscall.UTF16PtrFromString(argsStr)
+	dir, _ := syscall.UTF16PtrFromString(workDir)
+
+	ret, _, _ := shellExecute.Call(
+		0, // hwnd
+		uintptr(unsafe.Pointer(verb)),
+		uintptr(unsafe.Pointer(file)),
+		uintptr(unsafe.Pointer(params)),
+		uintptr(unsafe.Pointer(dir)),
+		1, // SW_SHOWNORMAL
+	)
+
+	if ret <= 32 {
+		return fmt.Errorf("权限提升失败，错误代码: %d", ret)
+	}
+
+	w.logger.Info("权限提升请求已发送，程序将退出")
+	// 成功启动提升权限的实例后，当前实例应该退出
+	os.Exit(0)
+	return nil
 }
 
 // repairWinDivertDriver 修复WinDivert驱动问题
@@ -1352,4 +1507,158 @@ func (w *WinDivertInterceptorImpl) PerformHealthCheck() error {
 
 	w.logger.Info("WinDivert健康检查通过")
 	return nil
+}
+
+// PerformanceMonitor 性能监控器
+type PerformanceMonitor struct {
+	logger               logging.Logger
+	mu                   sync.RWMutex
+	startTime            time.Time
+	lastCheckTime        time.Time
+	processingLatency    time.Duration
+	maxProcessingLatency time.Duration
+	cpuUsagePercent      float64
+	memoryUsageMB        uint64
+	packetsPerSecond     uint64
+	bytesPerSecond       uint64
+	lastPacketCount      uint64
+	lastByteCount        uint64
+	performanceAlerts    []string
+
+	// 性能阈值
+	maxLatencyThreshold time.Duration // 最大延迟阈值 (5ms)
+	cpuThreshold        float64       // CPU使用率阈值 (8%)
+	memoryThresholdMB   uint64        // 内存使用阈值 (100MB)
+}
+
+// NewPerformanceMonitor 创建性能监控器
+func NewPerformanceMonitor(logger logging.Logger) *PerformanceMonitor {
+	return &PerformanceMonitor{
+		logger:              logger,
+		startTime:           time.Now(),
+		lastCheckTime:       time.Now(),
+		maxLatencyThreshold: 5 * time.Millisecond,
+		cpuThreshold:        8.0,
+		memoryThresholdMB:   100,
+		performanceAlerts:   make([]string, 0),
+	}
+}
+
+// RecordProcessingLatency 记录处理延迟
+func (pm *PerformanceMonitor) RecordProcessingLatency(latency time.Duration) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	pm.processingLatency = latency
+	if latency > pm.maxProcessingLatency {
+		pm.maxProcessingLatency = latency
+	}
+
+	// 检查延迟阈值
+	if latency > pm.maxLatencyThreshold {
+		alert := fmt.Sprintf("处理延迟超过阈值: %v > %v", latency, pm.maxLatencyThreshold)
+		pm.addAlert(alert)
+	}
+}
+
+// UpdateSystemMetrics 更新系统指标
+func (pm *PerformanceMonitor) UpdateSystemMetrics() {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	// 获取CPU使用率
+	cpuUsage := pm.getCPUUsage()
+	pm.cpuUsagePercent = cpuUsage
+
+	// 获取内存使用量
+	memUsage := pm.getMemoryUsage()
+	pm.memoryUsageMB = memUsage
+
+	// 检查阈值
+	if cpuUsage > pm.cpuThreshold {
+		alert := fmt.Sprintf("CPU使用率超过阈值: %.2f%% > %.2f%%", cpuUsage, pm.cpuThreshold)
+		pm.addAlert(alert)
+	}
+
+	if memUsage > pm.memoryThresholdMB {
+		alert := fmt.Sprintf("内存使用量超过阈值: %dMB > %dMB", memUsage, pm.memoryThresholdMB)
+		pm.addAlert(alert)
+	}
+}
+
+// UpdateTrafficMetrics 更新流量指标
+func (pm *PerformanceMonitor) UpdateTrafficMetrics(packetCount, byteCount uint64) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	now := time.Now()
+	timeDiff := now.Sub(pm.lastCheckTime).Seconds()
+
+	if timeDiff > 0 {
+		pm.packetsPerSecond = uint64(float64(packetCount-pm.lastPacketCount) / timeDiff)
+		pm.bytesPerSecond = uint64(float64(byteCount-pm.lastByteCount) / timeDiff)
+	}
+
+	pm.lastPacketCount = packetCount
+	pm.lastByteCount = byteCount
+	pm.lastCheckTime = now
+}
+
+// GetMetrics 获取性能指标
+func (pm *PerformanceMonitor) GetMetrics() map[string]interface{} {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	return map[string]interface{}{
+		"uptime":                 time.Since(pm.startTime),
+		"processing_latency":     pm.processingLatency,
+		"max_processing_latency": pm.maxProcessingLatency,
+		"cpu_usage_percent":      pm.cpuUsagePercent,
+		"memory_usage_mb":        pm.memoryUsageMB,
+		"packets_per_second":     pm.packetsPerSecond,
+		"bytes_per_second":       pm.bytesPerSecond,
+		"performance_alerts":     pm.performanceAlerts,
+		"within_latency_sla":     pm.processingLatency <= pm.maxLatencyThreshold,
+		"within_cpu_sla":         pm.cpuUsagePercent <= pm.cpuThreshold,
+		"within_memory_sla":      pm.memoryUsageMB <= pm.memoryThresholdMB,
+	}
+}
+
+// addAlert 添加性能告警
+func (pm *PerformanceMonitor) addAlert(alert string) {
+	// 限制告警数量，避免内存泄漏
+	if len(pm.performanceAlerts) >= 100 {
+		pm.performanceAlerts = pm.performanceAlerts[1:]
+	}
+
+	timestamp := time.Now().Format("15:04:05")
+	pm.performanceAlerts = append(pm.performanceAlerts, fmt.Sprintf("[%s] %s", timestamp, alert))
+	pm.logger.Warn("性能告警", "alert", alert)
+}
+
+// getCPUUsage 获取CPU使用率
+func (pm *PerformanceMonitor) getCPUUsage() float64 {
+	// 简化实现：使用runtime.NumGoroutine()作为CPU使用率的近似值
+	// 实际生产环境中应该使用更精确的CPU监控
+	goroutines := runtime.NumGoroutine()
+
+	// 将协程数量转换为CPU使用率百分比（简化算法）
+	// 假设100个协程对应约5%的CPU使用率
+	cpuPercent := float64(goroutines) * 0.05
+
+	// 限制在合理范围内
+	if cpuPercent > 100.0 {
+		cpuPercent = 100.0
+	}
+
+	return cpuPercent
+}
+
+// getMemoryUsage 获取内存使用量（MB）
+func (pm *PerformanceMonitor) getMemoryUsage() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	// 返回堆内存使用量（MB）
+	return m.Alloc / 1024 / 1024
 }
