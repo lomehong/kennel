@@ -147,6 +147,14 @@ func (f *ParserFactoryImpl) registerBuiltinParsers() {
 		return NewGraphQLParser(config.Logger), nil
 	}
 
+	// 默认解析器
+	f.creators["unknown"] = func(config ParserConfig) (ProtocolParser, error) {
+		return NewDefaultParser(config.Logger), nil
+	}
+	f.creators["default"] = func(config ParserConfig) (ProtocolParser, error) {
+		return NewDefaultParser(config.Logger), nil
+	}
+
 	f.logger.Info("注册内置协议解析器完成", "count", len(f.creators))
 }
 
@@ -170,15 +178,15 @@ func (d *ProtocolDetector) DetectProtocol(data []byte, port uint16) string {
 
 	// 基于端口的初步判断
 	protocolByPort := d.detectByPort(port)
-	
+
 	// 基于数据内容的深度检测
 	protocolByContent := d.detectByContent(data)
-	
+
 	// 优先使用内容检测结果，如果无法确定则使用端口检测结果
 	if protocolByContent != "unknown" {
 		return protocolByContent
 	}
-	
+
 	return protocolByPort
 }
 
@@ -251,18 +259,18 @@ func (d *ProtocolDetector) detectByContent(data []byte) string {
 func (d *ProtocolDetector) isHTTP(data []byte) bool {
 	httpMethods := []string{"GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH ", "TRACE "}
 	dataStr := string(data[:min(len(data), 20)])
-	
+
 	for _, method := range httpMethods {
 		if len(dataStr) >= len(method) && dataStr[:len(method)] == method {
 			return true
 		}
 	}
-	
+
 	// 检测HTTP响应
 	if len(dataStr) >= 8 && dataStr[:8] == "HTTP/1." {
 		return true
 	}
-	
+
 	return false
 }
 
@@ -271,12 +279,12 @@ func (d *ProtocolDetector) isTLS(data []byte) bool {
 	if len(data) < 6 {
 		return false
 	}
-	
+
 	// TLS记录头: Content Type (1 byte) + Version (2 bytes) + Length (2 bytes)
 	// Content Type: 22 (Handshake), 23 (Application Data), 21 (Alert), 20 (Change Cipher Spec)
 	contentType := data[0]
 	version := uint16(data[1])<<8 | uint16(data[2])
-	
+
 	// 检查内容类型
 	validContentTypes := []byte{20, 21, 22, 23}
 	isValidContentType := false
@@ -286,17 +294,17 @@ func (d *ProtocolDetector) isTLS(data []byte) bool {
 			break
 		}
 	}
-	
+
 	// 检查版本 (TLS 1.0-1.3: 0x0301-0x0304, SSL 3.0: 0x0300)
 	isValidVersion := version >= 0x0300 && version <= 0x0304
-	
+
 	return isValidContentType && isValidVersion
 }
 
 // isFTP 检测是否为FTP协议
 func (d *ProtocolDetector) isFTP(data []byte) bool {
 	dataStr := string(data)
-	
+
 	// FTP响应码格式: 3位数字 + 空格或-
 	if len(dataStr) >= 4 {
 		if dataStr[0] >= '1' && dataStr[0] <= '5' &&
@@ -306,7 +314,7 @@ func (d *ProtocolDetector) isFTP(data []byte) bool {
 			return true
 		}
 	}
-	
+
 	// FTP命令检测
 	ftpCommands := []string{"USER ", "PASS ", "QUIT", "LIST", "RETR ", "STOR "}
 	for _, cmd := range ftpCommands {
@@ -314,14 +322,14 @@ func (d *ProtocolDetector) isFTP(data []byte) bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
 // isSMTP 检测是否为SMTP协议
 func (d *ProtocolDetector) isSMTP(data []byte) bool {
 	dataStr := string(data)
-	
+
 	// SMTP响应码
 	if len(dataStr) >= 4 {
 		if dataStr[0] >= '2' && dataStr[0] <= '5' &&
@@ -331,7 +339,7 @@ func (d *ProtocolDetector) isSMTP(data []byte) bool {
 			return true
 		}
 	}
-	
+
 	// SMTP命令
 	smtpCommands := []string{"HELO ", "EHLO ", "MAIL ", "RCPT ", "DATA", "QUIT"}
 	for _, cmd := range smtpCommands {
@@ -339,7 +347,7 @@ func (d *ProtocolDetector) isSMTP(data []byte) bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -348,13 +356,13 @@ func (d *ProtocolDetector) isMySQL(data []byte) bool {
 	if len(data) < 5 {
 		return false
 	}
-	
+
 	// MySQL握手包检测
 	// 包长度 (3 bytes) + 序列号 (1 byte) + 协议版本 (1 byte)
 	if data[4] == 0x0a { // MySQL协议版本10
 		return true
 	}
-	
+
 	return false
 }
 
@@ -363,10 +371,10 @@ func (d *ProtocolDetector) isMQTT(data []byte) bool {
 	if len(data) < 2 {
 		return false
 	}
-	
+
 	// MQTT固定头部: 消息类型 (4 bits) + 标志 (4 bits) + 剩余长度
 	messageType := (data[0] >> 4) & 0x0F
-	
+
 	// MQTT消息类型: 1-14 (0和15保留)
 	return messageType >= 1 && messageType <= 14
 }

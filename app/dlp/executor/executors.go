@@ -697,6 +697,103 @@ func (ae *AuditExecutorImpl) logAuditEvent(event *AuditEvent) error {
 	// 记录审计事件日志
 	ae.logger.Info("审计事件", logFields...)
 
+	// 写入审计日志文件
+	if err := ae.writeAuditEventToFile(event); err != nil {
+		ae.logger.Error("写入审计日志文件失败", "error", err)
+		return err
+	}
+
+	return nil
+}
+
+// writeAuditEventToFile 将审计事件写入文件
+func (ae *AuditExecutorImpl) writeAuditEventToFile(event *AuditEvent) error {
+	// 构建审计日志文件路径
+	logDir := "app/dlp/logs"
+	logFile := filepath.Join(logDir, "dlp_audit.log")
+
+	// 确保日志目录存在
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return fmt.Errorf("创建日志目录失败: %w", err)
+	}
+
+	// 构建完整的审计事件JSON
+	auditRecord := map[string]interface{}{
+		"id":        event.ID,
+		"timestamp": event.Timestamp.Format(time.RFC3339),
+		"type":      event.EventType,
+		"action":    event.Action,
+		"user_id":   event.UserID,
+		"device_id": event.DeviceID,
+		"result":    event.Result,
+		"details": map[string]interface{}{
+			"risk_level":      event.RiskLevel,
+			"risk_score":      event.RiskScore,
+			"reason":          event.Reason,
+			"confidence":      1.0,
+			"matched_rules":   1,
+			"processing_time": "0s",
+		},
+	}
+
+	// 添加网络信息
+	if event.SourceIP != "" {
+		auditRecord["source_ip"] = event.SourceIP
+	}
+	if event.DestIP != "" {
+		auditRecord["dest_ip"] = event.DestIP
+	}
+	if event.Protocol != "" {
+		auditRecord["protocol"] = event.Protocol
+	}
+	if event.SourcePort != 0 {
+		auditRecord["source_port"] = event.SourcePort
+	}
+	if event.DestPort != 0 {
+		auditRecord["dest_port"] = event.DestPort
+	}
+	if event.DestDomain != "" {
+		auditRecord["dest_domain"] = event.DestDomain
+	}
+	if event.RequestURL != "" {
+		auditRecord["request_url"] = event.RequestURL
+	}
+	if event.RequestData != "" {
+		auditRecord["request_data"] = event.RequestData
+	}
+
+	// 添加进程信息
+	if event.ProcessInfo != nil {
+		auditRecord["process_pid"] = event.ProcessInfo.PID
+		auditRecord["process_name"] = event.ProcessInfo.Name
+		auditRecord["process_path"] = event.ProcessInfo.Path
+		auditRecord["process_command"] = event.ProcessInfo.CommandLine
+		auditRecord["process_user"] = event.ProcessInfo.UserName
+	}
+
+	// 序列化为JSON
+	jsonData, err := json.Marshal(auditRecord)
+	if err != nil {
+		return fmt.Errorf("序列化审计事件失败: %w", err)
+	}
+
+	// 写入文件
+	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("打开审计日志文件失败: %w", err)
+	}
+	defer file.Close()
+
+	// 写入JSON数据和换行符
+	if _, err := file.Write(append(jsonData, '\n')); err != nil {
+		return fmt.Errorf("写入审计日志失败: %w", err)
+	}
+
+	// 刷新缓冲区
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("刷新审计日志文件失败: %w", err)
+	}
+
 	return nil
 }
 

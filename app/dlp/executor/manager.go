@@ -13,14 +13,14 @@ import (
 
 // ExecutionManagerImpl 执行管理器实现
 type ExecutionManagerImpl struct {
-	executors         map[engine.PolicyAction]ActionExecutor
-	config            ExecutorConfig
-	logger            logging.Logger
-	stats             ManagerStats
-	metricsCollector  MetricsCollector
+	executors           map[engine.PolicyAction]ActionExecutor
+	config              ExecutorConfig
+	logger              logging.Logger
+	stats               ManagerStats
+	metricsCollector    MetricsCollector
 	notificationService NotificationService
-	running           int32
-	mu                sync.RWMutex
+	running             int32
+	mu                  sync.RWMutex
 }
 
 // NewExecutionManager 创建执行管理器
@@ -264,13 +264,13 @@ func (em *ExecutionManagerImpl) shouldRetry(err error, policy *RetryPolicy) bool
 
 // calculateRetryDelay 计算重试延迟
 func (em *ExecutionManagerImpl) calculateRetryDelay(attempt int, policy *RetryPolicy) time.Duration {
-	delay := time.Duration(float64(policy.InitialDelay) * 
+	delay := time.Duration(float64(policy.InitialDelay) *
 		(policy.BackoffFactor * float64(attempt)))
-	
+
 	if delay > policy.MaxDelay {
 		delay = policy.MaxDelay
 	}
-	
+
 	return delay
 }
 
@@ -295,11 +295,11 @@ func (em *ExecutionManagerImpl) shouldSendNotification(decision *engine.PolicyDe
 // sendNotification 发送通知
 func (em *ExecutionManagerImpl) sendNotification(decision *engine.PolicyDecision, result *ExecutionResult) {
 	notification := &Notification{
-		ID:        fmt.Sprintf("notif_%d", time.Now().UnixNano()),
-		Title:     fmt.Sprintf("DLP动作执行: %s", decision.Action.String()),
-		Message:   em.buildNotificationMessage(decision, result),
-		Level:     em.getNotificationLevel(decision),
-		Channel:   "default",
+		ID:         fmt.Sprintf("notif_%d", time.Now().UnixNano()),
+		Title:      fmt.Sprintf("DLP动作执行: %s", decision.Action.String()),
+		Message:    em.buildNotificationMessage(decision, result),
+		Level:      em.getNotificationLevel(decision),
+		Channel:    "default",
 		Recipients: []string{"admin@example.com"},
 		Metadata: map[string]interface{}{
 			"decision_id": decision.ID,

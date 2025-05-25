@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/lomehong/kennel/app/dlp/interceptor"
+	"dlp/interceptor"
 	"github.com/lomehong/kennel/pkg/logging"
 )
 

@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lomehong/kennel/app/dlp/interceptor"
-	"github.com/lomehong/kennel/app/dlp/parser"
+	"dlp/interceptor"
+	"dlp/parser"
 	"github.com/lomehong/kennel/pkg/logging"
 )
 

@@ -11,6 +11,7 @@ import (
 	"github.com/lomehong/kennel/app/dlp/executor"
 	"github.com/lomehong/kennel/app/dlp/interceptor"
 	"github.com/lomehong/kennel/app/dlp/parser"
+
 	"github.com/lomehong/kennel/pkg/core/plugin"
 	"github.com/lomehong/kennel/pkg/logging"
 	sdk "github.com/lomehong/kennel/pkg/sdk/go"

@@ -258,14 +258,12 @@ func (w *WinDivertInterceptorImpl) Start() error {
 		// 不直接返回错误，继续尝试
 	}
 
-	// 打开WinDivert句柄
-	filter := w.config.Filter
-	if filter == "" {
-		// 使用更简单的过滤器，只捕获TCP流量
-		filter = "tcp"
-	}
+	// 打开WinDivert句柄 - 使用优化过滤器排除私有网络流量
+	filter := w.buildOptimizedFilter()
 
-	w.logger.Info("使用WinDivert过滤器", "filter", filter)
+	w.logger.Info("使用优化WinDivert过滤器（排除私有网络）",
+		"filter", filter,
+		"config_filter", w.config.Filter)
 
 	// 使用重试机制打开WinDivert句柄
 	handle, err := w.openWinDivertHandleWithRetry(filter)
@@ -533,25 +531,23 @@ func (w *WinDivertInterceptorImpl) processBatch(packets []*PacketInfo, workerID 
 		// 根据模式决定处理方式
 		switch w.config.Mode {
 		case ModeMonitorOnly:
-			// 监控模式：发送到分析通道，同时立即重新注入
+			// 监控模式：立即重新注入，然后发送到分析通道（优化性能）
+			if w.config.AutoReinject {
+				// 优先重新注入，避免网络延迟
+				if err := w.Reinject(packet); err != nil {
+					w.logger.Debug("重新注入失败", "error", err, "packet_id", packet.ID)
+					atomic.AddUint64(&w.stats.PacketsDropped, 1)
+					continue // 跳过这个数据包
+				}
+			}
+
+			// 非阻塞发送到分析通道
 			select {
 			case w.packetCh <- packet:
 				// 成功发送到分析通道
 			default:
+				// 分析通道满了，不影响重新注入
 				atomic.AddUint64(&w.stats.PacketsDropped, 1)
-			}
-
-			// 立即重新注入，不等待分析结果
-			if w.config.AutoReinject {
-				select {
-				case w.reinjectCh <- packet:
-					// 成功发送到重新注入通道
-				default:
-					// 重新注入通道满了，直接重新注入
-					if err := w.Reinject(packet); err != nil {
-						w.logger.Debug("直接重新注入失败", "error", err, "packet_id", packet.ID)
-					}
-				}
 			}
 
 		case ModeInterceptAndAllow:
@@ -665,7 +661,74 @@ func (w *WinDivertInterceptorImpl) receivePacket(buffer []byte) (*PacketInfo, er
 		return nil, err
 	}
 
+	// 应用层额外过滤验证：确保不处理私有网络流量
+	if packet != nil && w.shouldFilterPacket(packet) {
+		w.logger.Debug("数据包被应用层过滤器排除",
+			"dest_ip", packet.DestIP.String(),
+			"dest_port", packet.DestPort,
+			"direction", packet.Direction)
+		return nil, nil // 返回nil表示数据包被过滤
+	}
+
 	return packet, nil
+}
+
+// shouldFilterPacket 检查数据包是否应该被过滤（排除私有网络流量）
+func (w *WinDivertInterceptorImpl) shouldFilterPacket(packet *PacketInfo) bool {
+	if packet == nil {
+		return true
+	}
+
+	// 目标IP地址已经是net.IP类型
+	destIP := packet.DestIP
+	if destIP == nil {
+		w.logger.Debug("目标IP地址为空", "packet_id", packet.ID)
+		return false // IP为空时不过滤，让后续处理决定
+	}
+
+	// 检查是否为IPv4地址
+	destIPv4 := destIP.To4()
+	if destIPv4 == nil {
+		// IPv6地址暂时不处理，可以根据需要扩展
+		w.logger.Debug("IPv6地址暂不过滤", "dest_ip", destIP.String())
+		return false
+	}
+
+	// 转换为32位整数便于比较
+	destAddr := uint32(destIPv4[0])<<24 | uint32(destIPv4[1])<<16 | uint32(destIPv4[2])<<8 | uint32(destIPv4[3])
+
+	// 检查是否为私有网络或本地地址
+	isPrivateOrLocal :=
+		// 本地回环 127.0.0.0/8
+		(destAddr >= 0x7F000000 && destAddr <= 0x7FFFFFFF) ||
+			// 私有网络A类 10.0.0.0/8
+			(destAddr >= 0x0A000000 && destAddr <= 0x0AFFFFFF) ||
+			// 私有网络B类 172.16.0.0/12
+			(destAddr >= 0xAC100000 && destAddr <= 0xAC1FFFFF) ||
+			// 私有网络C类 192.168.0.0/16
+			(destAddr >= 0xC0A80000 && destAddr <= 0xC0A8FFFF) ||
+			// 链路本地地址 169.254.0.0/16
+			(destAddr >= 0xA9FE0000 && destAddr <= 0xA9FEFFFF) ||
+			// 组播地址 224.0.0.0/4
+			(destAddr >= 0xE0000000 && destAddr <= 0xEFFFFFFF) ||
+			// 广播地址
+			(destAddr == 0xFFFFFFFF)
+
+	if isPrivateOrLocal {
+		w.logger.Debug("检测到私有/本地网络流量，将被过滤",
+			"dest_ip", destIP.String(),
+			"dest_addr_hex", fmt.Sprintf("0x%08X", destAddr),
+			"dest_port", packet.DestPort,
+			"protocol", packet.Protocol)
+		return true
+	}
+
+	// 公网地址，不过滤
+	w.logger.Debug("检测到公网流量，允许处理",
+		"dest_ip", destIP.String(),
+		"dest_port", packet.DestPort,
+		"protocol", packet.Protocol)
+	return false
 }
 
 // parsePacket 解析数据包
@@ -775,39 +838,91 @@ func (w *WinDivertInterceptorImpl) parseUDPHeader(packet *PacketInfo, data []byt
 	return nil
 }
 
-// getProcessInfo 获取进程信息
+// getProcessInfo 获取进程信息（增强版本 - 多策略查找）
 func (w *WinDivertInterceptorImpl) getProcessInfo(packet *PacketInfo) *ProcessInfo {
-	// 根据连接信息查找对应的进程PID
+	// 策略1：四元组精确匹配（TCP连接）
 	var pid uint32
 
-	// 对于出站数据包，使用源IP和端口查找进程
-	if packet.Direction == PacketDirectionOutbound {
-		pid = w.processTracker.GetProcessByConnection(packet.Protocol, packet.SourceIP, packet.SourcePort)
-	} else {
-		// 对于入站数据包，使用目标IP和端口查找进程
-		pid = w.processTracker.GetProcessByConnection(packet.Protocol, packet.DestIP, packet.DestPort)
+	if packet.Protocol == ProtocolTCP {
+		if packet.Direction == PacketDirectionOutbound {
+			// 出站：本地是源，远程是目标
+			pid = w.processTracker.GetProcessByConnectionEx(
+				packet.Protocol,
+				packet.SourceIP, packet.SourcePort,
+				packet.DestIP, packet.DestPort,
+			)
+		} else {
+			// 入站：本地是目标，远程是源
+			pid = w.processTracker.GetProcessByConnectionEx(
+				packet.Protocol,
+				packet.DestIP, packet.DestPort,
+				packet.SourceIP, packet.SourcePort,
+			)
+		}
+	}
+
+	// 策略2：如果四元组匹配失败，使用本地连接匹配
+	if pid == 0 {
+		if packet.Direction == PacketDirectionOutbound {
+			pid = w.processTracker.GetProcessByConnection(packet.Protocol, packet.SourceIP, packet.SourcePort)
+		} else {
+			pid = w.processTracker.GetProcessByConnection(packet.Protocol, packet.DestIP, packet.DestPort)
+		}
+	}
+
+	// 策略3：如果仍然失败，尝试强制更新连接表后再次查找
+	if pid == 0 {
+		w.logger.Debug("首次查找失败，强制更新连接表后重试")
+		if err := w.processTracker.UpdateConnectionTables(); err != nil {
+			w.logger.Error("强制更新连接表失败", "error", err)
+		} else {
+			// 重新尝试查找
+			if packet.Direction == PacketDirectionOutbound {
+				pid = w.processTracker.GetProcessByConnection(packet.Protocol, packet.SourceIP, packet.SourcePort)
+			} else {
+				pid = w.processTracker.GetProcessByConnection(packet.Protocol, packet.DestIP, packet.DestPort)
+			}
+		}
 	}
 
 	if pid == 0 {
-		w.logger.Debug("未找到对应的进程",
+		w.logger.Debug("所有策略都未找到对应的进程",
 			"direction", packet.Direction,
 			"protocol", packet.Protocol,
 			"source", fmt.Sprintf("%s:%d", packet.SourceIP, packet.SourcePort),
 			"dest", fmt.Sprintf("%s:%d", packet.DestIP, packet.DestPort))
-		return nil
+
+		// 返回一个包含基本信息的ProcessInfo，而不是nil
+		return &ProcessInfo{
+			PID:         0,
+			ProcessName: "unknown_process",
+			ExecutePath: "",
+			User:        "unknown",
+			CommandLine: "",
+		}
 	}
 
 	// 从进程跟踪器获取详细进程信息
 	processInfo := w.processTracker.GetProcessInfo(pid)
 	if processInfo == nil {
 		w.logger.Debug("获取进程详细信息失败", "pid", pid)
-		return nil
+		// 返回基本的进程信息
+		return &ProcessInfo{
+			PID:         int(pid),
+			ProcessName: "process_info_unavailable",
+			ExecutePath: "",
+			User:        "unknown",
+			CommandLine: "",
+		}
 	}
 
 	w.logger.Debug("成功获取进程信息",
 		"pid", processInfo.PID,
 		"name", processInfo.ProcessName,
-		"path", processInfo.ExecutePath)
+		"path", processInfo.ExecutePath,
+		"user", processInfo.User,
+		"direction", packet.Direction,
+		"protocol", packet.Protocol)
 
 	return processInfo
 }
@@ -820,22 +935,72 @@ func ntohl(n uint32) uint32 {
 	return (n<<24)&0xff000000 | (n<<8)&0xff0000 | (n>>8)&0xff00 | n>>24
 }
 
-// openWinDivertHandleWithRetry 使用重试机制打开WinDivert句柄
-func (w *WinDivertInterceptorImpl) openWinDivertHandleWithRetry(originalFilter string) (uintptr, error) {
-	// 尝试不同的过滤器和标志组合
-	testConfigs := []struct {
+// buildOptimizedFilter 构建优化的WinDivert过滤器，排除本地和私有网络流量
+func (w *WinDivertInterceptorImpl) buildOptimizedFilter() string {
+	// 基础过滤器：只拦截出站TCP流量的特定端口
+	baseFilter := "outbound and tcp and (tcp.DstPort == 80 or tcp.DstPort == 443 or tcp.DstPort == 21 or tcp.DstPort == 25 or tcp.DstPort == 3306)"
+
+	// 排除本地和私有网络的条件
+	excludeConditions := []string{
+		// 排除本地回环地址 127.0.0.0/8
+		"not (ip.DstAddr >= 127.0.0.0 and ip.DstAddr <= 127.255.255.255)",
+		// 排除私有网络A类 10.0.0.0/8
+		"not (ip.DstAddr >= 10.0.0.0 and ip.DstAddr <= 10.255.255.255)",
+		// 排除私有网络B类 172.16.0.0/12
+		"not (ip.DstAddr >= 172.16.0.0 and ip.DstAddr <= 172.31.255.255)",
+		// 排除私有网络C类 192.168.0.0/16
+		"not (ip.DstAddr >= 192.168.0.0 and ip.DstAddr <= 192.168.255.255)",
+		// 排除链路本地地址 169.254.0.0/16
+		"not (ip.DstAddr >= 169.254.0.0 and ip.DstAddr <= 169.254.255.255)",
+		// 排除组播地址 224.0.0.0/4
+		"not (ip.DstAddr >= 224.0.0.0 and ip.DstAddr <= 239.255.255.255)",
+		// 排除广播地址
+		"not (ip.DstAddr == 255.255.255.255)",
+	}
+
+	// 组合过滤器
+	filter := baseFilter
+	for _, condition := range excludeConditions {
+		filter += " and " + condition
+	}
+
+	w.logger.Info("构建优化过滤器", "filter", filter)
+	return filter
+}
+
+// buildFallbackFilters 构建备用过滤器列表
+func (w *WinDivertInterceptorImpl) buildFallbackFilters() []struct {
+	filter string
+	flag   uintptr
+	desc   string
+} {
+	// 主过滤器：排除私有网络的完整过滤器
+	optimizedFilter := w.buildOptimizedFilter()
+
+	return []struct {
 		filter string
 		flag   uintptr
 		desc   string
 	}{
-		{"tcp", 0, "TCP流量，默认标志"},
-		{"tcp", WINDIVERT_FLAG_SNIFF, "TCP流量，嗅探模式"},
-		{"tcp", WINDIVERT_FLAG_RECV_ONLY, "TCP流量，只接收"},
-		{"true", 0, "所有流量，默认标志"},
+		// 首选：优化过滤器 + 嗅探模式
+		{optimizedFilter, WINDIVERT_FLAG_SNIFF, "优化过滤器，嗅探模式，排除私有网络"},
+		// 备选1：优化过滤器 + 默认模式
+		{optimizedFilter, 0, "优化过滤器，默认模式，排除私有网络"},
+		// 备选2：简化过滤器 + 嗅探模式（只排除本地回环）
+		{"outbound and tcp and (tcp.DstPort == 80 or tcp.DstPort == 443) and not (ip.DstAddr >= 127.0.0.0 and ip.DstAddr <= 127.255.255.255)", WINDIVERT_FLAG_SNIFF, "简化过滤器，排除本地回环"},
+		// 备选3：基础TCP过滤器 + 嗅探模式
+		{"outbound and tcp and (tcp.DstPort == 80 or tcp.DstPort == 443)", WINDIVERT_FLAG_SNIFF, "基础TCP过滤器，嗅探模式"},
+		// 备选4：最简单的TCP过滤器
+		{"tcp", WINDIVERT_FLAG_SNIFF, "最简单TCP过滤器，嗅探模式"},
+		// 备选5：所有流量（最后的选择）
 		{"true", WINDIVERT_FLAG_SNIFF, "所有流量，嗅探模式"},
-		{"outbound", 0, "出站流量，默认标志"},
-		{"inbound", 0, "入站流量，默认标志"},
 	}
+}
+
+// openWinDivertHandleWithRetry 使用重试机制打开WinDivert句柄
+func (w *WinDivertInterceptorImpl) openWinDivertHandleWithRetry(originalFilter string) (uintptr, error) {
+	// 使用优化的过滤器配置，排除私有网络流量
+	testConfigs := w.buildFallbackFilters()
 
 	var lastError syscall.Errno
 	maxRetries := 2

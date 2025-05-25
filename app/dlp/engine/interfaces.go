@@ -74,13 +74,13 @@ type MatchedRule struct {
 
 // DecisionContext 决策上下文
 type DecisionContext struct {
-	PacketInfo     *interceptor.PacketInfo `json:"packet_info"`
-	ParsedData     *parser.ParsedData      `json:"parsed_data"`
+	PacketInfo     *interceptor.PacketInfo  `json:"packet_info"`
+	ParsedData     *parser.ParsedData       `json:"parsed_data"`
 	AnalysisResult *analyzer.AnalysisResult `json:"analysis_result"`
-	UserInfo       *UserInfo               `json:"user_info"`
-	DeviceInfo     *DeviceInfo             `json:"device_info"`
-	SessionInfo    *SessionInfo            `json:"session_info"`
-	Environment    *Environment            `json:"environment"`
+	UserInfo       *UserInfo                `json:"user_info"`
+	DeviceInfo     *DeviceInfo              `json:"device_info"`
+	SessionInfo    *SessionInfo             `json:"session_info"`
+	Environment    *Environment             `json:"environment"`
 }
 
 // UserInfo 用户信息
@@ -97,34 +97,34 @@ type UserInfo struct {
 
 // DeviceInfo 设备信息
 type DeviceInfo struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	OS           string `json:"os"`
-	Version      string `json:"version"`
-	Location     string `json:"location"`
-	NetworkInfo  string `json:"network_info"`
-	TrustLevel   string `json:"trust_level"`
-	Compliance   bool   `json:"compliance"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	OS          string `json:"os"`
+	Version     string `json:"version"`
+	Location    string `json:"location"`
+	NetworkInfo string `json:"network_info"`
+	TrustLevel  string `json:"trust_level"`
+	Compliance  bool   `json:"compliance"`
 }
 
 // SessionInfo 会话信息
 type SessionInfo struct {
-	ID        string    `json:"id"`
-	StartTime time.Time `json:"start_time"`
+	ID        string        `json:"id"`
+	StartTime time.Time     `json:"start_time"`
 	Duration  time.Duration `json:"duration"`
-	Activity  string    `json:"activity"`
-	RiskScore float64   `json:"risk_score"`
+	Activity  string        `json:"activity"`
+	RiskScore float64       `json:"risk_score"`
 }
 
 // Environment 环境信息
 type Environment struct {
-	Location    string    `json:"location"`
-	Network     string    `json:"network"`
-	TimeZone    string    `json:"time_zone"`
-	WorkingHours bool     `json:"working_hours"`
-	Holiday     bool      `json:"holiday"`
-	Timestamp   time.Time `json:"timestamp"`
+	Location     string    `json:"location"`
+	Network      string    `json:"network"`
+	TimeZone     string    `json:"time_zone"`
+	WorkingHours bool      `json:"working_hours"`
+	Holiday      bool      `json:"holiday"`
+	Timestamp    time.Time `json:"timestamp"`
 }
 
 // PolicyRule 策略规则
@@ -159,19 +159,19 @@ type RuleAction struct {
 
 // PolicyEngineConfig 策略引擎配置
 type PolicyEngineConfig struct {
-	MaxRules        int           `yaml:"max_rules" json:"max_rules"`
-	Timeout         time.Duration `yaml:"timeout" json:"timeout"`
-	EnableCache     bool          `yaml:"enable_cache" json:"enable_cache"`
-	CacheSize       int           `yaml:"cache_size" json:"cache_size"`
-	CacheTTL        time.Duration `yaml:"cache_ttl" json:"cache_ttl"`
-	EnableAudit     bool          `yaml:"enable_audit" json:"enable_audit"`
-	AuditLevel      string        `yaml:"audit_level" json:"audit_level"`
-	DefaultAction   PolicyAction  `yaml:"default_action" json:"default_action"`
-	RulesPath       string        `yaml:"rules_path" json:"rules_path"`
-	EnableMLEngine  bool          `yaml:"enable_ml_engine" json:"enable_ml_engine"`
-	MLModelPath     string        `yaml:"ml_model_path" json:"ml_model_path"`
-	MaxConcurrency  int           `yaml:"max_concurrency" json:"max_concurrency"`
-	Logger          logging.Logger `yaml:"-" json:"-"`
+	MaxRules       int            `yaml:"max_rules" json:"max_rules"`
+	Timeout        time.Duration  `yaml:"timeout" json:"timeout"`
+	EnableCache    bool           `yaml:"enable_cache" json:"enable_cache"`
+	CacheSize      int            `yaml:"cache_size" json:"cache_size"`
+	CacheTTL       time.Duration  `yaml:"cache_ttl" json:"cache_ttl"`
+	EnableAudit    bool           `yaml:"enable_audit" json:"enable_audit"`
+	AuditLevel     string         `yaml:"audit_level" json:"audit_level"`
+	DefaultAction  PolicyAction   `yaml:"default_action" json:"default_action"`
+	RulesPath      string         `yaml:"rules_path" json:"rules_path"`
+	EnableMLEngine bool           `yaml:"enable_ml_engine" json:"enable_ml_engine"`
+	MLModelPath    string         `yaml:"ml_model_path" json:"ml_model_path"`
+	MaxConcurrency int            `yaml:"max_concurrency" json:"max_concurrency"`
+	Logger         logging.Logger `yaml:"-" json:"-"`
 }
 
 // DefaultPolicyEngineConfig 返回默认策略引擎配置
@@ -228,17 +228,17 @@ type PolicyEngine interface {
 
 // EngineStats 引擎统计信息
 type EngineStats struct {
-	TotalDecisions    uint64            `json:"total_decisions"`
-	AllowedDecisions  uint64            `json:"allowed_decisions"`
-	BlockedDecisions  uint64            `json:"blocked_decisions"`
-	AlertDecisions    uint64            `json:"alert_decisions"`
-	AuditDecisions    uint64            `json:"audit_decisions"`
-	FailedDecisions   uint64            `json:"failed_decisions"`
-	AverageTime       time.Duration     `json:"average_time"`
-	RuleStats         map[string]uint64 `json:"rule_stats"`
-	LastError         error             `json:"last_error,omitempty"`
-	StartTime         time.Time         `json:"start_time"`
-	Uptime            time.Duration     `json:"uptime"`
+	TotalDecisions   uint64            `json:"total_decisions"`
+	AllowedDecisions uint64            `json:"allowed_decisions"`
+	BlockedDecisions uint64            `json:"blocked_decisions"`
+	AlertDecisions   uint64            `json:"alert_decisions"`
+	AuditDecisions   uint64            `json:"audit_decisions"`
+	FailedDecisions  uint64            `json:"failed_decisions"`
+	AverageTime      time.Duration     `json:"average_time"`
+	RuleStats        map[string]uint64 `json:"rule_stats"`
+	LastError        error             `json:"last_error,omitempty"`
+	StartTime        time.Time         `json:"start_time"`
+	Uptime           time.Duration     `json:"uptime"`
 }
 
 // RuleEvaluator 规则评估器接口
@@ -373,18 +373,18 @@ type MLEngine interface {
 
 // TrainingData 训练数据
 type TrainingData struct {
-	Features []float64 `json:"features"`
-	Label    float64   `json:"label"`
+	Features []float64              `json:"features"`
+	Label    float64                `json:"label"`
 	Metadata map[string]interface{} `json:"metadata"`
 }
 
 // ModelInfo 模型信息
 type ModelInfo struct {
-	Name        string    `json:"name"`
-	Version     string    `json:"version"`
-	Type        string    `json:"type"`
-	Accuracy    float64   `json:"accuracy"`
-	TrainedAt   time.Time `json:"trained_at"`
-	FeatureCount int      `json:"feature_count"`
-	SampleCount  int      `json:"sample_count"`
+	Name         string    `json:"name"`
+	Version      string    `json:"version"`
+	Type         string    `json:"type"`
+	Accuracy     float64   `json:"accuracy"`
+	TrainedAt    time.Time `json:"trained_at"`
+	FeatureCount int       `json:"feature_count"`
+	SampleCount  int       `json:"sample_count"`
 }

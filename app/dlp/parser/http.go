@@ -9,11 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/lomehong/kennel/app/dlp/interceptor"
+
 	"github.com/lomehong/kennel/pkg/logging"
 )
 
@@ -66,14 +68,30 @@ func (h *HTTPParserImpl) CanParse(packet *interceptor.PacketInfo) bool {
 		return false
 	}
 
-	// 检查端口（只处理HTTP端口，不处理HTTPS）
-	if packet.DestPort == 80 || packet.DestPort == 8080 {
-		return true
+	// 检查数据包是否有有效载荷
+	if len(packet.Payload) == 0 {
+		return false
 	}
 
-	// 检查数据包内容是否包含HTTP特征（明文HTTP）
 	payload := string(packet.Payload)
-	return h.isHTTPTraffic(payload) && !h.isTLSTraffic(packet.Payload)
+
+	// 首先检查是否是明确的HTTP流量
+	if h.isHTTPTraffic(payload) {
+		// 对于明确的HTTP流量，进一步验证
+		if h.validateHTTPContent(payload) {
+			return true
+		}
+	}
+
+	// 检查HTTP端口（作为辅助判断）
+	if packet.DestPort == 80 || packet.DestPort == 8080 || packet.SourcePort == 80 || packet.SourcePort == 8080 {
+		// 对于HTTP端口，检查是否可能是HTTP流量（排除明显的TLS）
+		if !h.isTLSTraffic(packet.Payload) {
+			return h.isHTTPTraffic(payload)
+		}
+	}
+
+	return false
 }
 
 // Parse 解析数据包
@@ -179,6 +197,47 @@ func (h *HTTPParserImpl) isHTTPTraffic(payload string) bool {
 	return false
 }
 
+// validateHTTPContent 验证HTTP内容的有效性
+func (h *HTTPParserImpl) validateHTTPContent(payload string) bool {
+	lines := strings.Split(payload, "\n")
+	if len(lines) == 0 {
+		return false
+	}
+
+	firstLine := strings.TrimSpace(lines[0])
+
+	// 验证HTTP请求行格式：METHOD PATH HTTP/VERSION
+	if h.isHTTPRequest([]byte(payload)) {
+		parts := strings.Fields(firstLine)
+		if len(parts) != 3 {
+			return false
+		}
+		// 检查HTTP版本格式
+		return strings.HasPrefix(parts[2], "HTTP/1.") || strings.HasPrefix(parts[2], "HTTP/2")
+	}
+
+	// 验证HTTP响应行格式：HTTP/VERSION STATUS_CODE STATUS_TEXT
+	if h.isHTTPResponse([]byte(payload)) {
+		parts := strings.Fields(firstLine)
+		if len(parts) < 2 {
+			return false
+		}
+		// 检查HTTP版本格式
+		if !strings.HasPrefix(parts[0], "HTTP/1.") && !strings.HasPrefix(parts[0], "HTTP/2") {
+			return false
+		}
+		// 检查状态码是否为数字
+		if len(parts) >= 2 {
+			if _, err := strconv.Atoi(parts[1]); err != nil {
+				return false
+			}
+		}
+		return true
+	}
+
+	return false
+}
+
 // isHTTPRequest 检查是否是HTTP请求
 func (h *HTTPParserImpl) isHTTPRequest(payload []byte) bool {
 	payloadStr := string(payload)
@@ -220,7 +279,7 @@ func (h *HTTPParserImpl) parseHTTPRequest(packet *interceptor.PacketInfo) (*Pars
 		Protocol:    "HTTP",
 		Headers:     headers,
 		Body:        body,
-		ContentType: req.Header.Get("Content-Type"),
+		ContentType: "application/http",
 		URL:         req.URL.String(),
 		Method:      req.Method,
 		Metadata: map[string]interface{}{
@@ -229,7 +288,23 @@ func (h *HTTPParserImpl) parseHTTPRequest(packet *interceptor.PacketInfo) (*Pars
 			"content_length": req.ContentLength,
 			"remote_addr":    req.RemoteAddr,
 			"request_uri":    req.RequestURI,
+			"scheme":         req.URL.Scheme,
+			"path":           req.URL.Path,
+			"query":          req.URL.RawQuery,
+			"fragment":       req.URL.Fragment,
+			"method":         req.Method,
+			"url":            req.URL.String(),
+			"data_method":    req.Method,
+			"data_url":       req.URL.String(),
+			"size":           len(packet.Payload),
+			"timestamp":      packet.Timestamp,
 		},
+	}
+
+	// 提取URL详细信息
+	urlInfo := h.extractURLInfo(req.URL.String())
+	for k, v := range urlInfo {
+		data.Metadata["url_"+k] = v
 	}
 
 	// 创建会话信息
@@ -296,14 +371,17 @@ func (h *HTTPParserImpl) parseHTTPResponse(packet *interceptor.PacketInfo) (*Par
 		Protocol:    "HTTP",
 		Headers:     headers,
 		Body:        body,
-		ContentType: resp.Header.Get("Content-Type"),
+		ContentType: "application/http",
 		StatusCode:  resp.StatusCode,
 		Metadata: map[string]interface{}{
-			"status":         resp.Status,
-			"status_code":    resp.StatusCode,
-			"content_length": resp.ContentLength,
-			"server":         resp.Header.Get("Server"),
-			"location":       resp.Header.Get("Location"),
+			"status":                resp.Status,
+			"status_code":           resp.StatusCode,
+			"content_length":        resp.ContentLength,
+			"server":                resp.Header.Get("Server"),
+			"location":              resp.Header.Get("Location"),
+			"size":                  len(packet.Payload),
+			"timestamp":             packet.Timestamp,
+			"response_content_type": resp.Header.Get("Content-Type"),
 		},
 	}
 

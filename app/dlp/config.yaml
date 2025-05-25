@@ -19,9 +19,10 @@ network_protocols:
   - "ftp"
   - "smtp"
 
-# 拦截器性能配置
+# 拦截器性能配置 - 已优化排除私有网络流量
 interceptor_config:
-  # 优化过滤器：只拦截特定端口的出站流量
+  # 注意：实际过滤器由代码动态生成，会自动排除私有网络流量
+  # 这个filter配置项已被buildOptimizedFilter()方法覆盖
   filter: "outbound and (tcp.DstPort == 80 or tcp.DstPort == 443 or tcp.DstPort == 21 or tcp.DstPort == 25 or tcp.DstPort == 3306)"
   buffer_size: 32768       # 32KB缓冲区
   channel_size: 500        # 通道大小
@@ -32,7 +33,7 @@ interceptor_config:
   worker_count: 2          # 工作协程数
   cache_size: 500          # 进程缓存大小
   interface: "en0"
-  # 绕过本地和私有网络流量
+  # 绕过本地和私有网络流量（已在WinDivert过滤器层面实现）
   bypass_cidr: "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
   proxy_port: 8080
   mode: 0                  # 0=监控模式, 1=拦截并允许, 2=拦截并阻断

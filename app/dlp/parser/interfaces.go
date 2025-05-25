@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/lomehong/kennel/app/dlp/interceptor"
+
 	"github.com/lomehong/kennel/pkg/logging"
 )
 

@@ -71,20 +71,20 @@ func (r RiskLevel) String() string {
 
 // AnalyzerConfig 分析器配置
 type AnalyzerConfig struct {
-	MaxContentSize    int64             `yaml:"max_content_size" json:"max_content_size"`
-	Timeout           time.Duration     `yaml:"timeout" json:"timeout"`
-	EnableMLAnalysis  bool              `yaml:"enable_ml_analysis" json:"enable_ml_analysis"`
-	MLModelPath       string            `yaml:"ml_model_path" json:"ml_model_path"`
-	EnableRegexRules  bool              `yaml:"enable_regex_rules" json:"enable_regex_rules"`
-	RegexRulesPath    string            `yaml:"regex_rules_path" json:"regex_rules_path"`
-	EnableKeywords    bool              `yaml:"enable_keywords" json:"enable_keywords"`
-	KeywordsPath      string            `yaml:"keywords_path" json:"keywords_path"`
-	MinConfidence     float64           `yaml:"min_confidence" json:"min_confidence"`
-	MaxConcurrency    int               `yaml:"max_concurrency" json:"max_concurrency"`
-	CacheSize         int               `yaml:"cache_size" json:"cache_size"`
-	CacheTTL          time.Duration     `yaml:"cache_ttl" json:"cache_ttl"`
-	CustomRules       map[string]string `yaml:"custom_rules" json:"custom_rules"`
-	Logger            logging.Logger    `yaml:"-" json:"-"`
+	MaxContentSize   int64             `yaml:"max_content_size" json:"max_content_size"`
+	Timeout          time.Duration     `yaml:"timeout" json:"timeout"`
+	EnableMLAnalysis bool              `yaml:"enable_ml_analysis" json:"enable_ml_analysis"`
+	MLModelPath      string            `yaml:"ml_model_path" json:"ml_model_path"`
+	EnableRegexRules bool              `yaml:"enable_regex_rules" json:"enable_regex_rules"`
+	RegexRulesPath   string            `yaml:"regex_rules_path" json:"regex_rules_path"`
+	EnableKeywords   bool              `yaml:"enable_keywords" json:"enable_keywords"`
+	KeywordsPath     string            `yaml:"keywords_path" json:"keywords_path"`
+	MinConfidence    float64           `yaml:"min_confidence" json:"min_confidence"`
+	MaxConcurrency   int               `yaml:"max_concurrency" json:"max_concurrency"`
+	CacheSize        int               `yaml:"cache_size" json:"cache_size"`
+	CacheTTL         time.Duration     `yaml:"cache_ttl" json:"cache_ttl"`
+	CustomRules      map[string]string `yaml:"custom_rules" json:"custom_rules"`
+	Logger           logging.Logger    `yaml:"-" json:"-"`
 }
 
 // DefaultAnalyzerConfig 返回默认分析器配置
@@ -132,26 +132,26 @@ type ContentAnalyzer interface {
 
 // AnalyzerInfo 分析器信息
 type AnalyzerInfo struct {
-	Name            string   `json:"name"`
-	Version         string   `json:"version"`
-	Description     string   `json:"description"`
-	SupportedTypes  []string `json:"supported_types"`
-	Author          string   `json:"author"`
-	License         string   `json:"license"`
-	RequiredModels  []string `json:"required_models"`
-	Capabilities    []string `json:"capabilities"`
+	Name           string   `json:"name"`
+	Version        string   `json:"version"`
+	Description    string   `json:"description"`
+	SupportedTypes []string `json:"supported_types"`
+	Author         string   `json:"author"`
+	License        string   `json:"license"`
+	RequiredModels []string `json:"required_models"`
+	Capabilities   []string `json:"capabilities"`
 }
 
 // AnalyzerStats 分析器统计信息
 type AnalyzerStats struct {
-	TotalAnalyzed     uint64        `json:"total_analyzed"`
-	SuccessfulAnalyzed uint64       `json:"successful_analyzed"`
-	FailedAnalyzed    uint64        `json:"failed_analyzed"`
-	SensitiveDetected uint64        `json:"sensitive_detected"`
-	AverageTime       time.Duration `json:"average_time"`
-	LastError         error         `json:"last_error,omitempty"`
-	StartTime         time.Time     `json:"start_time"`
-	Uptime            time.Duration `json:"uptime"`
+	TotalAnalyzed      uint64        `json:"total_analyzed"`
+	SuccessfulAnalyzed uint64        `json:"successful_analyzed"`
+	FailedAnalyzed     uint64        `json:"failed_analyzed"`
+	SensitiveDetected  uint64        `json:"sensitive_detected"`
+	AverageTime        time.Duration `json:"average_time"`
+	LastError          error         `json:"last_error,omitempty"`
+	StartTime          time.Time     `json:"start_time"`
+	Uptime             time.Duration `json:"uptime"`
 }
 
 // AnalysisManager 分析管理器接口
@@ -209,18 +209,18 @@ type RegexRule struct {
 
 // KeywordRule 关键词规则
 type KeywordRule struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Keywords    []string               `json:"keywords"`
-	Type        string                 `json:"type"`
-	Category    string                 `json:"category"`
-	RiskLevel   RiskLevel              `json:"risk_level"`
-	Confidence  float64                `json:"confidence"`
-	CaseSensitive bool                 `json:"case_sensitive"`
-	WholeWord   bool                   `json:"whole_word"`
-	Enabled     bool                   `json:"enabled"`
-	Metadata    map[string]interface{} `json:"metadata"`
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	Description   string                 `json:"description"`
+	Keywords      []string               `json:"keywords"`
+	Type          string                 `json:"type"`
+	Category      string                 `json:"category"`
+	RiskLevel     RiskLevel              `json:"risk_level"`
+	Confidence    float64                `json:"confidence"`
+	CaseSensitive bool                   `json:"case_sensitive"`
+	WholeWord     bool                   `json:"whole_word"`
+	Enabled       bool                   `json:"enabled"`
+	Metadata      map[string]interface{} `json:"metadata"`
 }
 
 // MLModel 机器学习模型接口
@@ -315,8 +315,8 @@ type ImageAnalyzer interface {
 
 // ObjectInfo 对象信息
 type ObjectInfo struct {
-	Label      string    `json:"label"`
-	Confidence float64   `json:"confidence"`
+	Label       string       `json:"label"`
+	Confidence  float64      `json:"confidence"`
 	BoundingBox *BoundingBox `json:"bounding_box"`
 }
 
@@ -360,10 +360,10 @@ type CacheManager interface {
 
 // CacheStats 缓存统计
 type CacheStats struct {
-	Hits        uint64 `json:"hits"`
-	Misses      uint64 `json:"misses"`
-	Size        int    `json:"size"`
-	MaxSize     int    `json:"max_size"`
-	Evictions   uint64 `json:"evictions"`
-	HitRate     float64 `json:"hit_rate"`
+	Hits      uint64  `json:"hits"`
+	Misses    uint64  `json:"misses"`
+	Size      int     `json:"size"`
+	MaxSize   int     `json:"max_size"`
+	Evictions uint64  `json:"evictions"`
+	HitRate   float64 `json:"hit_rate"`
 }

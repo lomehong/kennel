@@ -112,17 +112,17 @@ func (re *RedirectExecutorImpl) updateAverageTime(duration time.Duration) {
 func (re *RedirectExecutorImpl) addRedirectRule(rule *RedirectRule) error {
 	// 简化的重定向规则添加实现
 	re.redirectRules = append(re.redirectRules, *rule)
-	
+
 	// 实际实现需要：
 	// 1. 配置网络重定向规则
 	// 2. 更新路由表或防火墙规则
 	// 3. 记录重定向信息
-	
-	re.logger.Info("添加重定向规则", 
+
+	re.logger.Info("添加重定向规则",
 		"original_dest", rule.OriginalDest,
 		"new_dest", rule.NewDest,
 		"reason", rule.Reason)
-	
+
 	return nil
 }
 
@@ -160,7 +160,7 @@ func (ae *AllowExecutorImpl) ExecuteAction(ctx context.Context, decision *engine
 	// 允许操作的简化实现
 	result.Metadata["action"] = "allow"
 	result.Metadata["reason"] = "通过安全检查"
-	
+
 	atomic.AddUint64(&ae.stats.SuccessfulExecutions, 1)
 	ae.logger.Debug("允许操作执行", "decision_id", decision.ID)
 
@@ -221,14 +221,14 @@ func NewMetricsCollector() MetricsCollector {
 // RecordExecution 记录执行指标
 func (mc *MetricsCollectorImpl) RecordExecution(action engine.PolicyAction, duration time.Duration, success bool) {
 	actionStr := action.String()
-	
+
 	// 记录执行次数
 	if count, exists := mc.metrics[actionStr+"_count"]; exists {
 		mc.metrics[actionStr+"_count"] = count.(int) + 1
 	} else {
 		mc.metrics[actionStr+"_count"] = 1
 	}
-	
+
 	// 记录成功/失败次数
 	if success {
 		if count, exists := mc.metrics[actionStr+"_success"]; exists {
@@ -243,7 +243,7 @@ func (mc *MetricsCollectorImpl) RecordExecution(action engine.PolicyAction, dura
 			mc.metrics[actionStr+"_failure"] = 1
 		}
 	}
-	
+
 	// 记录平均执行时间
 	mc.metrics[actionStr+"_avg_duration"] = duration
 }
@@ -251,14 +251,14 @@ func (mc *MetricsCollectorImpl) RecordExecution(action engine.PolicyAction, dura
 // RecordError 记录错误指标
 func (mc *MetricsCollectorImpl) RecordError(action engine.PolicyAction, error string) {
 	actionStr := action.String()
-	
+
 	// 记录错误次数
 	if count, exists := mc.metrics[actionStr+"_errors"]; exists {
 		mc.metrics[actionStr+"_errors"] = count.(int) + 1
 	} else {
 		mc.metrics[actionStr+"_errors"] = 1
 	}
-	
+
 	// 记录最后一个错误
 	mc.metrics[actionStr+"_last_error"] = error
 }
@@ -300,10 +300,10 @@ func (ns *NotificationServiceImpl) SendNotification(notification *Notification) 
 		"level", notification.Level.String(),
 		"channel", notification.Channel,
 		"recipients", notification.Recipients)
-	
+
 	// 简化的通知发送实现
 	// 实际实现需要根据不同的通道发送通知
-	
+
 	return nil
 }
 
@@ -322,9 +322,9 @@ func (ns *NotificationServiceImpl) ConfigureChannel(channel string, config map[s
 // TestChannel 测试通知渠道
 func (ns *NotificationServiceImpl) TestChannel(channel string) error {
 	ns.logger.Info("测试通知渠道", "channel", channel)
-	
+
 	// 简化的通道测试实现
 	// 实际实现需要发送测试消息
-	
+
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lomehong/kennel/app/dlp/interceptor"
+
 	"github.com/lomehong/kennel/pkg/logging"
 )
 
@@ -70,17 +71,35 @@ func (pm *ProtocolManagerImpl) GetParser(protocol string) (ProtocolParser, bool)
 func (pm *ProtocolManagerImpl) ParsePacket(packet *interceptor.PacketInfo) (*ParsedData, error) {
 	atomic.AddUint64(&pm.stats.TotalPackets, 1)
 
-	// 自动识别协议
+	// 自动识别协议 - 使用优先级排序
 	var parser ProtocolParser
 	var protocol string
 
 	pm.mu.RLock()
-	// 首先尝试找到特定的协议解析器
-	for proto, p := range pm.parsers {
-		if proto != "unknown" && proto != "default" && p.CanParse(packet) {
+
+	// 定义协议解析器优先级顺序（从高到低）
+	// 注意：http应该在https之前检查，避免HTTP流量被误判为TLS
+	protocolPriority := []string{"http", "https", "ftp", "smtp", "mysql"}
+
+	// 按优先级顺序查找匹配的解析器
+	for _, proto := range protocolPriority {
+		if p, exists := pm.parsers[proto]; exists && p.CanParse(packet) {
 			parser = p
 			protocol = proto
+			pm.logger.Debug("找到匹配的协议解析器", "protocol", proto, "packet_size", packet.Size, "dest_port", packet.DestPort)
 			break
+		}
+	}
+
+	// 如果优先级列表中没有找到，再检查其他解析器
+	if parser == nil {
+		for proto, p := range pm.parsers {
+			if proto != "unknown" && proto != "default" && !contains(protocolPriority, proto) && p.CanParse(packet) {
+				parser = p
+				protocol = proto
+				pm.logger.Debug("找到其他协议解析器", "protocol", proto, "packet_size", packet.Size)
+				break
+			}
 		}
 	}
 
@@ -89,15 +108,23 @@ func (pm *ProtocolManagerImpl) ParsePacket(packet *interceptor.PacketInfo) (*Par
 		if defaultParser, exists := pm.parsers["unknown"]; exists {
 			parser = defaultParser
 			protocol = "unknown"
+			pm.logger.Debug("使用未知协议解析器", "packet_size", packet.Size)
 		} else if defaultParser, exists := pm.parsers["default"]; exists {
 			parser = defaultParser
 			protocol = "default"
+			pm.logger.Debug("使用默认协议解析器", "packet_size", packet.Size)
 		}
 	}
 	pm.mu.RUnlock()
 
 	if parser == nil {
 		atomic.AddUint64(&pm.stats.FailedPackets, 1)
+		pm.logger.Error("未找到合适的协议解析器",
+			"dest_port", packet.DestPort,
+			"source_port", packet.SourcePort,
+			"payload_size", len(packet.Payload),
+			"source_ip", packet.SourceIP.String(),
+			"dest_ip", packet.DestIP.String())
 		return nil, fmt.Errorf("未找到合适的协议解析器")
 	}
 
@@ -106,7 +133,15 @@ func (pm *ProtocolManagerImpl) ParsePacket(packet *interceptor.PacketInfo) (*Par
 	if err != nil {
 		atomic.AddUint64(&pm.stats.FailedPackets, 1)
 		pm.stats.LastError = err
-		return nil, fmt.Errorf("解析数据包失败: %w", err)
+		pm.logger.Error("协议解析失败",
+			"protocol", protocol,
+			"dest_port", packet.DestPort,
+			"source_port", packet.SourcePort,
+			"payload_size", len(packet.Payload),
+			"source_ip", packet.SourceIP.String(),
+			"dest_ip", packet.DestIP.String(),
+			"error", err)
+		return nil, fmt.Errorf("协议【%s】解析失败: %w", protocol, err)
 	}
 
 	// 更新统计信息
@@ -411,4 +446,14 @@ func getProtocolName(protocol interceptor.Protocol) string {
 	default:
 		return "Unknown"
 	}
+}
+
+// contains 检查字符串切片是否包含指定字符串
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }

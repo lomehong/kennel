@@ -112,13 +112,24 @@ func (m *MySQLParser) CanParse(packet *interceptor.PacketInfo) bool {
 		return false
 	}
 
-	// 检查端口
-	if packet.DestPort == 3306 || packet.SourcePort == 3306 {
-		return true
+	// 检查是否是TCP协议
+	if packet.Protocol != interceptor.ProtocolTCP {
+		return false
 	}
 
-	// 检查MySQL协议特征
-	return m.isMySQLPacket(packet.Payload)
+	// 首先检查端口（MySQL标准端口）
+	if packet.DestPort == 3306 || packet.SourcePort == 3306 {
+		// 对于MySQL端口，进一步验证协议特征
+		return m.isMySQLPacket(packet.Payload) && m.validateMySQLContent(packet.Payload)
+	}
+
+	// 对于非标准端口，需要严格的协议特征检查
+	if m.isMySQLPacket(packet.Payload) {
+		// 额外验证：确保不是HTTP或其他协议的误判
+		return m.validateMySQLContent(packet.Payload) && !m.isHTTPLikeContent(packet.Payload)
+	}
+
+	return false
 }
 
 // Parse 解析数据包
@@ -184,6 +195,109 @@ func (m *MySQLParser) isMySQLPacket(data []byte) bool {
 	if len(data) > 4 {
 		command := data[4]
 		return command <= uint8(ComStmtFetch)
+	}
+
+	return false
+}
+
+// validateMySQLContent 验证MySQL内容的有效性
+func (m *MySQLParser) validateMySQLContent(data []byte) bool {
+	if len(data) < 5 {
+		return false
+	}
+
+	// 解析数据包头
+	length := uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16
+	sequenceID := data[3]
+
+	// 验证长度字段
+	if length == 0 || length > 16777215 {
+		return false
+	}
+
+	// 验证数据包完整性
+	if len(data) < int(4+length) {
+		return false
+	}
+
+	// 验证序列号（通常从0开始，递增）
+	if sequenceID > 100 { // 合理的序列号范围
+		return false
+	}
+
+	// 检查载荷内容
+	if len(data) > 4 {
+		payload := data[4:]
+		firstByte := payload[0]
+
+		// 验证MySQL协议特定的字节模式
+		switch firstByte {
+		case 0x0a: // 握手包
+			return m.validateHandshakePacket(payload)
+		case 0x00: // OK包
+			return len(payload) >= 7
+		case 0xff: // 错误包
+			return len(payload) >= 3
+		default:
+			// 命令包验证
+			if firstByte <= uint8(ComStmtFetch) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// validateHandshakePacket 验证握手包
+func (m *MySQLParser) validateHandshakePacket(payload []byte) bool {
+	if len(payload) < 20 {
+		return false
+	}
+
+	// 检查协议版本（应该是10）
+	if payload[0] != 0x0a {
+		return false
+	}
+
+	// 检查服务器版本字符串（应该以null结尾）
+	versionEnd := 1
+	for versionEnd < len(payload) && payload[versionEnd] != 0 {
+		versionEnd++
+		if versionEnd > 50 { // 版本字符串不应该太长
+			return false
+		}
+	}
+
+	return versionEnd < len(payload) && payload[versionEnd] == 0
+}
+
+// isHTTPLikeContent 检查是否像HTTP内容
+func (m *MySQLParser) isHTTPLikeContent(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+
+	content := string(data)
+
+	// 检查HTTP方法
+	httpMethods := []string{"GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH "}
+	for _, method := range httpMethods {
+		if strings.HasPrefix(content, method) {
+			return true
+		}
+	}
+
+	// 检查HTTP响应
+	if strings.HasPrefix(content, "HTTP/") {
+		return true
+	}
+
+	// 检查HTTP头部特征
+	if strings.Contains(content, "Content-Type:") ||
+		strings.Contains(content, "User-Agent:") ||
+		strings.Contains(content, "Host:") {
+		return true
 	}
 
 	return false
