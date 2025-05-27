@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"time"
 
+	configerror "github.com/lomehong/kennel/pkg/core/config"
 	"github.com/spf13/viper"
 )
 
@@ -88,11 +89,30 @@ func (cm *ConfigManager) InitConfig() error {
 	if cm.configFile != "" {
 		viper.SetConfigFile(cm.configFile)
 	} else {
-		// 在当前目录和用户主目录中查找配置文件
-		viper.AddConfigPath(".")
-		viper.AddConfigPath(filepath.Join(os.Getenv("HOME"), ".appframework"))
-		viper.SetConfigName("config")
-		viper.SetConfigType("yaml")
+		// 按优先级查找配置文件
+		configFiles := []string{
+			"config.unified.yaml", // 统一配置文件（最高优先级）
+			"config.new.yaml",     // 新版配置文件
+			"config.yaml",         // 旧版配置文件（向后兼容）
+			"config.yml",
+		}
+
+		var configFound bool
+		for _, configFile := range configFiles {
+			if _, err := os.Stat(configFile); err == nil {
+				viper.SetConfigFile(configFile)
+				configFound = true
+				break
+			}
+		}
+
+		if !configFound {
+			// 如果没有找到配置文件，使用默认设置
+			viper.AddConfigPath(".")
+			viper.AddConfigPath(filepath.Join(os.Getenv("HOME"), ".appframework"))
+			viper.SetConfigName("config")
+			viper.SetConfigType("yaml")
+		}
 	}
 
 	// 读取环境变量
@@ -103,9 +123,29 @@ func (cm *ConfigManager) InitConfig() error {
 	if err := viper.ReadInConfig(); err != nil {
 		// 如果配置文件不存在，创建一个默认配置文件
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			// 使用统一错误处理
+			configErr := configerror.NewConfigError(
+				configerror.ConfigErrorTypeFileNotFound,
+				"main",
+				viper.ConfigFileUsed(),
+				"",
+				"配置文件未找到，将创建默认配置",
+				err,
+			)
+			configerror.HandleConfigError(configErr)
 			return cm.CreateDefaultConfig()
 		}
-		return fmt.Errorf("无法读取配置文件: %w", err)
+
+		// 使用统一错误处理
+		configErr := configerror.NewConfigError(
+			configerror.ConfigErrorTypeParseError,
+			"main",
+			viper.ConfigFileUsed(),
+			"",
+			"配置文件读取失败",
+			err,
+		)
+		return configerror.HandleConfigError(configErr)
 	}
 
 	return nil

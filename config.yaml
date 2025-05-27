@@ -169,3 +169,85 @@ audit:
   # 警报接收者
   alert_recipients:
     - "admin@example.com"
+
+# 自我防护配置
+self_protection:
+  # 是否启用自我防护（需要编译时启用selfprotect标签）
+  enabled: false
+  # 防护级别：none, basic, standard, strict
+  level: "basic"
+  # 紧急禁用文件（存在此文件时自动禁用防护）
+  emergency_disable: ".emergency_disable"
+  # 检查间隔
+  check_interval: "5s"
+  # 重启延迟
+  restart_delay: "3s"
+  # 最大重启尝试次数
+  max_restart_attempts: 3
+
+  # 白名单配置
+  whitelist:
+    enabled: true
+    # 白名单进程
+    processes:
+      - "taskmgr.exe"
+      - "procexp.exe"
+      - "procexp64.exe"
+    # 白名单用户
+    users:
+      - "SYSTEM"
+      - "Administrator"
+    # 白名单签名
+    signatures: []
+
+  # 进程防护配置
+  process_protection:
+    enabled: true
+    # 受保护的进程
+    protected_processes:
+      - "agent.exe"
+      - "dlp.exe"
+      - "audit.exe"
+      - "device.exe"
+    # 是否监控子进程
+    monitor_children: true
+    # 是否防止调试
+    prevent_debug: true
+    # 是否防止内存转储
+    prevent_dump: true
+
+  # 文件防护配置
+  file_protection:
+    enabled: true
+    # 受保护的文件
+    protected_files:
+      - "config.yaml"
+      - "agent.exe"
+    # 受保护的目录
+    protected_dirs:
+      - "app"
+    # 是否检查文件完整性
+    check_integrity: true
+    # 是否启用备份
+    backup_enabled: true
+    # 备份目录
+    backup_dir: "backup"
+
+  # 注册表防护配置（仅Windows）
+  registry_protection:
+    enabled: true
+    # 受保护的注册表键
+    protected_keys:
+      - "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\KennelAgent"
+    # 是否监控注册表变更
+    monitor_changes: true
+
+  # 服务防护配置（仅Windows）
+  service_protection:
+    enabled: true
+    # 服务名称
+    service_name: "KennelAgent"
+    # 是否自动重启
+    auto_restart: true
+    # 是否防止禁用
+    prevent_disable: true

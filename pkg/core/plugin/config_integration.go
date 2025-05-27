@@ -55,16 +55,18 @@ func (ci *ConfigIntegration) Initialize() error {
 	}
 
 	// 注册插件配置验证器
+	allValidators := config.GetAllPluginValidators()
 	for _, metadata := range metadataList {
-		// 创建基本验证器
-		validator := config.NewPluginConfigValidator(metadata.ID)
-
-		// 添加基本字段
-		validator.AddFieldType("enabled", reflect.Bool)
-		validator.AddDefault("enabled", true)
-
-		// 注册验证器
-		ci.RegisterPluginValidator(metadata.ID, validator)
+		// 获取预定义的验证器
+		if validator, exists := allValidators[metadata.ID]; exists {
+			ci.RegisterPluginValidator(metadata.ID, validator)
+		} else {
+			// 创建基本验证器作为后备
+			validator := config.NewPluginConfigValidator(metadata.ID)
+			validator.AddFieldType("enabled", reflect.Bool)
+			validator.AddDefault("enabled", true)
+			ci.RegisterPluginValidator(metadata.ID, validator)
+		}
 	}
 
 	// 验证配置

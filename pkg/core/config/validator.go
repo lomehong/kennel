@@ -30,6 +30,165 @@ type PluginConfigValidator struct {
 // FieldValidator 字段验证器
 type FieldValidator func(value interface{}) error
 
+// 预定义验证器
+
+// StringLengthValidator 字符串长度验证器
+func StringLengthValidator(min, max int) FieldValidator {
+	return func(value interface{}) error {
+		str, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("期望字符串类型")
+		}
+		if len(str) < min {
+			return fmt.Errorf("字符串长度不能少于 %d 个字符", min)
+		}
+		if len(str) > max {
+			return fmt.Errorf("字符串长度不能超过 %d 个字符", max)
+		}
+		return nil
+	}
+}
+
+// StringEnumValidator 字符串枚举验证器
+func StringEnumValidator(validValues ...string) FieldValidator {
+	return func(value interface{}) error {
+		str, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("期望字符串类型")
+		}
+		for _, valid := range validValues {
+			if str == valid {
+				return nil
+			}
+		}
+		return fmt.Errorf("值必须是以下之一: %v", validValues)
+	}
+}
+
+// IntRangeValidator 整数范围验证器
+func IntRangeValidator(min, max int) FieldValidator {
+	return func(value interface{}) error {
+		var intVal int
+		switch v := value.(type) {
+		case int:
+			intVal = v
+		case int64:
+			intVal = int(v)
+		case float64:
+			intVal = int(v)
+		default:
+			return fmt.Errorf("期望整数类型")
+		}
+		if intVal < min {
+			return fmt.Errorf("值不能小于 %d", min)
+		}
+		if intVal > max {
+			return fmt.Errorf("值不能大于 %d", max)
+		}
+		return nil
+	}
+}
+
+// URLValidator URL格式验证器
+func URLValidator() FieldValidator {
+	return func(value interface{}) error {
+		str, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("期望字符串类型")
+		}
+		if str == "" {
+			return nil // 允许空值
+		}
+		if !strings.HasPrefix(str, "http://") && !strings.HasPrefix(str, "https://") {
+			return fmt.Errorf("URL必须以http://或https://开头")
+		}
+		return nil
+	}
+}
+
+// DurationValidator 时间间隔验证器
+func DurationValidator(min, max int) FieldValidator {
+	return func(value interface{}) error {
+		var intVal int
+		switch v := value.(type) {
+		case int:
+			intVal = v
+		case int64:
+			intVal = int(v)
+		case float64:
+			intVal = int(v)
+		default:
+			return fmt.Errorf("期望整数类型（秒）")
+		}
+		if intVal < min {
+			return fmt.Errorf("时间间隔不能小于 %d 秒", min)
+		}
+		if intVal > max {
+			return fmt.Errorf("时间间隔不能大于 %d 秒", max)
+		}
+		return nil
+	}
+}
+
+// PathValidator 路径验证器
+func PathValidator() FieldValidator {
+	return func(value interface{}) error {
+		str, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("期望字符串类型")
+		}
+		if str == "" {
+			return fmt.Errorf("路径不能为空")
+		}
+		// 检查路径中是否包含非法字符
+		invalidChars := []string{"<", ">", ":", "\"", "|", "?", "*"}
+		for _, char := range invalidChars {
+			if strings.Contains(str, char) {
+				return fmt.Errorf("路径包含非法字符: %s", char)
+			}
+		}
+		return nil
+	}
+}
+
+// ArrayValidator 数组验证器
+func ArrayValidator(minLen, maxLen int) FieldValidator {
+	return func(value interface{}) error {
+		arr, ok := value.([]interface{})
+		if !ok {
+			return fmt.Errorf("期望数组类型")
+		}
+		if len(arr) < minLen {
+			return fmt.Errorf("数组长度不能少于 %d", minLen)
+		}
+		if len(arr) > maxLen {
+			return fmt.Errorf("数组长度不能超过 %d", maxLen)
+		}
+		return nil
+	}
+}
+
+// PortValidator 端口号验证器
+func PortValidator() FieldValidator {
+	return func(value interface{}) error {
+		var intVal int
+		switch v := value.(type) {
+		case int:
+			intVal = v
+		case int64:
+			intVal = int(v)
+		case float64:
+			intVal = int(v)
+		default:
+			return fmt.Errorf("期望整数类型")
+		}
+		if intVal < 1 || intVal > 65535 {
+			return fmt.Errorf("端口号必须在1-65535范围内")
+		}
+		return nil
+	}
+}
+
 // NewPluginConfigValidator 创建插件配置验证器
 func NewPluginConfigValidator(pluginID string) *PluginConfigValidator {
 	return &PluginConfigValidator{
@@ -141,6 +300,18 @@ func validateType(value interface{}, kind reflect.Kind) error {
 	}
 
 	actualKind := reflect.TypeOf(value).Kind()
+
+	// 处理数字类型的兼容性
+	if kind == reflect.Float64 && (actualKind == reflect.Int || actualKind == reflect.Int64) {
+		return nil // int可以转换为float64
+	}
+	if kind == reflect.Int && (actualKind == reflect.Float64 || actualKind == reflect.Int64) {
+		return nil // float64和int64可以转换为int
+	}
+	if kind == reflect.Int64 && (actualKind == reflect.Int || actualKind == reflect.Float64) {
+		return nil // int和float64可以转换为int64
+	}
+
 	if actualKind != kind {
 		return fmt.Errorf("期望类型 %s，实际类型 %s", kind, actualKind)
 	}
@@ -163,29 +334,6 @@ func StringValidator(allowedValues ...string) FieldValidator {
 				}
 			}
 			return fmt.Errorf("值 %s 不在允许的值列表中: %s", str, strings.Join(allowedValues, ", "))
-		}
-
-		return nil
-	}
-}
-
-// IntRangeValidator 整数范围验证器
-func IntRangeValidator(min, max int) FieldValidator {
-	return func(value interface{}) error {
-		var intValue int
-		switch v := value.(type) {
-		case int:
-			intValue = v
-		case int64:
-			intValue = int(v)
-		case float64:
-			intValue = int(v)
-		default:
-			return fmt.Errorf("期望整数类型")
-		}
-
-		if intValue < min || intValue > max {
-			return fmt.Errorf("值 %d 不在允许的范围 [%d, %d] 内", intValue, min, max)
 		}
 
 		return nil
